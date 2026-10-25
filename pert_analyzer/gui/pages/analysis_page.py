@@ -465,7 +465,8 @@ class StatusPanel(QWidget):
 def _info_card_row(label: str, value: QLabel) -> QWidget:
     """A single label/value row inside an info card."""
     row = QWidget()
-    row.setStyleSheet("background: transparent; border: none;")
+    row.setObjectName("infoRow")
+    row.setStyleSheet("QWidget#infoRow { background: transparent; border: none; }")
     rl = QHBoxLayout(row)
     rl.setContentsMargins(0, 0, 0, 0)
     rl.setSpacing(MD)
@@ -524,8 +525,15 @@ class AnalysisPage(QWidget):
         page.addSpacing(SM)
 
         # body: preview left, info panel right
+        # NOTE: plain-declaration stylesheets (no selector) on a container
+        # cascade to ALL descendants, wiping their backgrounds/borders — that
+        # is what flattened every button on this page. Scope everything to the
+        # widget itself so app-level QSS buttons render correctly.
         body = QWidget()
-        body.setStyleSheet("background: transparent; border: none;")
+        body.setObjectName("analysisBody")
+        body.setStyleSheet(
+            "QWidget#analysisBody { background: transparent; border: none; }"
+        )
         body_layout = QHBoxLayout(body)
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(MD)
@@ -622,13 +630,18 @@ class AnalysisPage(QWidget):
         info_layout.addWidget(_info_card_row("Diagram type", self._diagram_type_value))
 
         status_row = QWidget()
-        status_row.setStyleSheet("background: transparent; border: none;")
+        status_row.setObjectName("statusRow")
+        status_row.setStyleSheet(
+            "QWidget#statusRow { background: transparent; border: none; }"
+        )
         sr = QHBoxLayout(status_row)
         sr.setContentsMargins(0, 0, 0, 0)
         sr.setSpacing(MD)
         cap = QLabel("Status")
         cap.setFont(QFont(*BODY_SMALL_FONT))
-        cap.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        cap.setStyleSheet(
+            f"color: {TEXT_SECONDARY}; background: transparent; border: none;"
+        )
         sr.addWidget(cap)
         sr.addStretch()
         self._status_badge = QLabel("READY")
@@ -642,7 +655,10 @@ class AnalysisPage(QWidget):
 
         info_group = QWidget()
         info_group.setLayout(info_layout)
-        info_group.setStyleSheet("background: transparent; border: none;")
+        info_group.setObjectName("infoGroup")
+        info_group.setStyleSheet(
+            "QWidget#infoGroup { background: transparent; border: none; }"
+        )
         info_card.layout().addWidget(info_group)
         right_layout.addWidget(info_card)
 
@@ -824,7 +840,7 @@ class AnalysisPage(QWidget):
         self._image_path = path
         self._image_dims = (w, h)
         size_kb = os.path.getsize(path) // 1024
-        self._file_info.setText(f"{os.path.basename(path)}   {w}\u00d7{h} px")
+        self._file_info.setText(f"{os.path.basename(path)}")
         self._file_info.setToolTip(path)
         self._dims_value.setText(f"{w} \u00d7 {h} px")
         self._size_value.setText(f"{size_kb} KB")

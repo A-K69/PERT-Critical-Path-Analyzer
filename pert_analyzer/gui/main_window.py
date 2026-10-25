@@ -5,6 +5,7 @@ Main application window: header + sidebar navigation + QStackedWidget + status b
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt
@@ -144,7 +145,8 @@ class MainWindow(QMainWindow):
         header.setObjectName("appHeader")
         header.setFixedHeight(HEADER_HEIGHT)
         header.setStyleSheet(
-            f"background-color: {SURFACE}; border-bottom: 1px solid {BORDER};"
+            f"QWidget#appHeader {{ background-color: {SURFACE};"
+            f" border-bottom: 1px solid {BORDER}; }}"
         )
         hdr_layout = QHBoxLayout(header)
         hdr_layout.setContentsMargins(LG, 0, XXL, 0)
@@ -193,8 +195,8 @@ class MainWindow(QMainWindow):
         sidebar.setObjectName("appSidebar")
         sidebar.setFixedWidth(SIDEBAR_WIDTH)
         sidebar.setStyleSheet(
-            f"background-color: {SURFACE};"
-            f" border-right: 1px solid {BORDER};"
+            f"QWidget#appSidebar {{ background-color: {SURFACE};"
+            f" border-right: 1px solid {BORDER}; }}"
         )
         sb_layout = QVBoxLayout(sidebar)
         sb_layout.setContentsMargins(SM, MD, SM, MD)
@@ -234,9 +236,14 @@ class MainWindow(QMainWindow):
         body_layout.addWidget(sidebar)
 
         # ── Stacked pages ─────────────────────────────────────
+        # Plain (selector-less) declarations on a container cascade to every
+        # descendant — this flattened every button on every page before being
+        # scoped to the container itself.
         content = QWidget()
         content.setObjectName("mainContent")
-        content.setStyleSheet("background: transparent; border: none;")
+        content.setStyleSheet(
+            "QWidget#mainContent { background: transparent; border: none; }"
+        )
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
@@ -481,7 +488,7 @@ class MainWindow(QMainWindow):
         self._session.set_image(path)
         self._analysis_page.set_state(self._session.state.value)
         self._refresh_pages()
-        self.statusBar().showMessage(f"Image: {path}")
+        self.statusBar().showMessage(f"Image: {Path(path).name}")
 
     def _on_image_removed(self) -> None:
         if not self._confirm_discard():

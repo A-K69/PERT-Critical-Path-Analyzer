@@ -41,6 +41,8 @@
         "what_if_enabled": false
     },
     "gui": {
+        "language": "en",
+        "direction": "ltr",
         "theme": "light",
         "window_width": 1400,
         "window_height": 900,

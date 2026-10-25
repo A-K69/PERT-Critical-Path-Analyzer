@@ -348,8 +348,8 @@ def test_review_complete_state_after_all_resolved(
             if page.is_complete:
                 break
     assert page.is_complete
-    row = page._complete_state._category_rows[ReviewCategory.ACTIVITIES].text()
-    assert "all 2 resolved" in row
+    count_label = page._complete_state._tiles[ReviewCategory.ACTIVITIES]["count"].text()
+    assert "2 / 2" in count_label
     assert session.pending_review_total() == 0
 
 

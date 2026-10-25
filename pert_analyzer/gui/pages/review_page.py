@@ -17,6 +17,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QProgressBar,
@@ -58,10 +59,21 @@ from pert_analyzer.gui.themes.palette import (
     TEXT_SECONDARY,
     WARNING,
 )
-from pert_analyzer.gui.themes.spacing import LG, MD, RADIUS_MD, RADIUS_SM, SM, XL, XS, XXL
+from pert_analyzer.gui.themes.spacing import (
+    LG,
+    MD,
+    RADIUS_LG,
+    RADIUS_MD,
+    RADIUS_SM,
+    SM,
+    XL,
+    XS,
+    XXL,
+)
 from pert_analyzer.gui.themes.typography import (
     BODY_SMALL_FONT,
     BODY_FONT,
+    DISPLAY_FONT,
     LABEL_FONT,
     MUTED_FONT,
     STATUS_FONT,
@@ -124,57 +136,125 @@ class EmptyReviewState(QWidget):
 
 
 class ReviewCompleteState(QWidget):
-    """Shown when every review item has been resolved."""
+    """Shown when every review item has been resolved.
+
+    Renders a centered completion card (consistent with the Results KPI
+    language): header row, one progress tile per review category, and the
+    apply / go-to-validation actions.
+    """
 
     apply_requested = Signal()
     go_validation = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(10)
-        layout.addStretch()
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 24, 24, 24)
+        outer.addStretch(stretch=2)
 
-        heading = QLabel("Review Complete")
-        heading.setFont(QFont(*TITLE_FONT))
-        heading.setStyleSheet(f"color: {SUCCESS};")
-        heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(heading)
+        card = QFrame()
+        card.setObjectName("completeCard")
+        card.setStyleSheet(
+            f"QFrame#completeCard {{ background-color: {SURFACE};"
+            f" border: 1px solid {BORDER}; border-radius: {RADIUS_LG}px; }}"
+        )
+        card.setFixedWidth(660)
+        body = QVBoxLayout(card)
+        body.setContentsMargins(XL, XL, XL, XL)
+        body.setSpacing(MD)
 
+        # ── header row: icon + title + subtitle ─────────────────
+        head = QHBoxLayout()
+        head.setSpacing(MD)
+        icon = QLabel("\u2714")  # heavy check
+        icon.setFont(QFont(*DISPLAY_FONT))
+        icon.setStyleSheet(
+            f"color: {SUCCESS}; background: transparent; border: none;"
+        )
+        head.addWidget(icon)
+        title_col = QVBoxLayout()
+        title_col.setSpacing(2)
+        self._heading = QLabel("Review Complete")
+        self._heading.setFont(QFont(*TITLE_FONT))
+        self._heading.setStyleSheet(
+            f"color: {SUCCESS}; background: transparent; border: none;"
+        )
+        title_col.addWidget(self._heading)
         self._sub_heading = QLabel("")
         self._sub_heading.setFont(QFont(*LABEL_FONT))
-        self._sub_heading.setStyleSheet(f"color: {TEXT_MUTED};")
-        self._sub_heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self._sub_heading)
+        self._sub_heading.setStyleSheet(
+            f"color: {TEXT_MUTED}; background: transparent; border: none;"
+        )
+        title_col.addWidget(self._sub_heading)
+        head.addLayout(title_col)
+        head.addStretch()
+        body.addLayout(head)
 
-        self._category_rows: dict[ReviewCategory, QLabel] = {}
+        # ── category progress tiles ─────────────────────────────
+        tiles = QHBoxLayout()
+        tiles.setSpacing(MD)
+        self._tiles: dict[ReviewCategory, dict[str, Any]] = {}
         for cat in review_categories.CATEGORIES:
-            lbl = QLabel("")
-            lbl.setFont(QFont(*LABEL_FONT))
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._category_rows[cat] = lbl
-            layout.addWidget(lbl)
+            tile = QFrame()
+            tile.setObjectName("completeTile")
+            tile.setStyleSheet(
+                f"QFrame#completeTile {{ background-color: {SURFACE_LIGHT};"
+                f" border: 1px solid {BORDER}; border-radius: {RADIUS_MD}px; }}"
+            )
+            tv = QVBoxLayout(tile)
+            tv.setContentsMargins(MD, MD, MD, MD)
+            tv.setSpacing(XS)
+            caption = QLabel("")
+            caption.setFont(QFont(*BODY_SMALL_FONT))
+            caption.setStyleSheet(
+                f"color: {TEXT_SECONDARY}; background: transparent; border: none;"
+            )
+            count = QLabel("")
+            count.setFont(QFont(*KPI_FONT))
+            count.setStyleSheet(
+                f"color: {TEXT}; background: transparent; border: none;"
+            )
+            bar = QProgressBar()
+            bar.setTextVisible(False)
+            bar.setFixedHeight(6)
+            bar.setRange(0, 1)
+            bar.setValue(0)
+            bar.setStyleSheet(
+                f"QProgressBar {{ background-color: {SURFACE};"
+                f" border: none; border-radius: 3px; }}"
+                f"QProgressBar::chunk {{ background-color: {ACCENT};"
+                f" border-radius: 3px; }}"
+            )
+            tv.addWidget(caption)
+            tv.addWidget(count)
+            tv.addWidget(bar)
+            self._tiles[cat] = {"caption": caption, "count": count, "bar": bar}
+            tiles.addWidget(tile, stretch=1)
+        body.addLayout(tiles)
 
-        layout.addSpacing(8)
-
+        # ── actions ─────────────────────────────────────────────
         self._apply_btn = QPushButton("Apply & Validate")
         self._apply_btn.setObjectName("primary")
         self._apply_btn.clicked.connect(self.apply_requested.emit)
-        layout.addWidget(self._apply_btn, alignment=Qt.AlignmentFlag.AlignCenter)
-
         self._go_btn = QPushButton("Go to Validation")
         self._go_btn.setObjectName("primary")
         self._go_btn.clicked.connect(self.go_validation.emit)
-        layout.addWidget(self._go_btn, alignment=Qt.AlignmentFlag.AlignCenter)
         self._go_btn.hide()
+        actions = QHBoxLayout()
+        actions.addStretch()
+        actions.addWidget(self._apply_btn)
+        actions.addWidget(self._go_btn)
+        body.addLayout(actions)
 
-        layout.addStretch()
+        outer.addWidget(card, alignment=Qt.AlignmentFlag.AlignHCenter)
+        outer.addStretch()
 
     def populate(self, session: Any) -> None:
         review_session = getattr(session, "review_session", None)
         applied = bool(getattr(session, "has_applied_reviews", False))
         ar = widget_language(self) == UiLanguage.ARABIC
+
+        self._heading.setText("اكتملت المراجعة" if ar else "Review Complete")
         if applied:
             self._sub_heading.setText(
                 "تم حل جميع عناصر المراجعة وتطبيق القرارات." if ar
@@ -191,23 +271,24 @@ class ReviewCompleteState(QWidget):
             self._go_btn.hide()
 
         for cat in review_categories.CATEGORIES:
+            tile = self._tiles[cat]
             items = _category_items(review_session, cat)
             pending = pending_count(review_session, cat) if review_session is not None else 0
             label = _CATEGORY_LABELS_AR[cat] if ar else _CATEGORY_LABELS[cat]
             if not items:
-                self._category_rows[cat].setText(
-                    f"\u2013 {label}: لا توجد عناصر" if ar else f"\u2013 {label}: no items"
-                )
-            elif pending == 0:
-                self._category_rows[cat].setText(
-                    f"\u2713 {label}: تم حل جميع العناصر ({len(items)})" if ar
-                    else f"\u2713 {label}: all {len(items)} resolved"
-                )
+                tile["caption"].setText(label)
+                tile["count"].setText("\u2013" if not ar else "—")
+                tile["bar"].setRange(0, 1)
+                tile["bar"].setValue(0)
+                continue
+            resolved = len(items) - pending
+            tile["caption"].setText(label)
+            if pending == 0:
+                tile["count"].setText(f"\u2713 {resolved} / {len(items)}")
             else:
-                self._category_rows[cat].setText(
-                    f"{label}: {pending} ما زال معلقًا" if ar
-                    else f"{label}: {pending} still pending"
-                )
+                tile["count"].setText(f"{resolved} / {len(items)}")
+            tile["bar"].setRange(0, len(items))
+            tile["bar"].setValue(resolved)
 
     def set_busy(self, busy: bool) -> None:
         self._apply_btn.setEnabled(not busy)

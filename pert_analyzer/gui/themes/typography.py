@@ -7,14 +7,20 @@ QFont constructors throughout the GUI.
 
 from __future__ import annotations
 
+import sys
+
 from PySide6.QtGui import QFont
 
 # ── Family ─────────────────────────────────────────────────────────
-# Noto Sans Arabic is available on Linux and supports Arabic shaping as well
-# as Latin text. Keeping one family here also makes QFont-based widgets and
-# the application-wide QSS render consistently instead of falling back to
-# Segoe UI (which is commonly unavailable outside Windows).
-FONT_FAMILY = "Noto Sans Arabic"
+# Platform-native fonts so every OS renders with a first-choice family
+# instead of relying on QSS fallback. Segoe UI ships with Windows and
+# covers Latin + Arabic; Noto Sans Arabic covers Linux desktops.
+_FONT_FAMILIES = {
+    "win32": "Segoe UI",
+    "darwin": "Helvetica Neue",
+    "linux": "Noto Sans Arabic",
+}
+FONT_FAMILY = _FONT_FAMILIES.get(sys.platform, "Noto Sans Arabic")
 
 # ── Named tuples: (family, size_px, weight) ────────────────────────
 DISPLAY_FONT = (FONT_FAMILY, 28, QFont.Weight.Bold)

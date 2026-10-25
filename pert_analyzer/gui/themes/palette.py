@@ -17,7 +17,7 @@ BORDER = "#303642"
 # ── Text hierarchy ─────────────────────────────────────────────────
 TEXT = "#F1F3F5"
 TEXT_SECONDARY = "#9BA3AF"
-TEXT_MUTED = "#6B7280"
+TEXT_MUTED = "#8A93A0"
 
 # ── Accent / interactive ───────────────────────────────────────────
 ACCENT = "#4F8CFF"

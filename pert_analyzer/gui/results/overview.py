@@ -41,6 +41,7 @@ from pert_analyzer.gui.themes.palette import (
 )
 from pert_analyzer.gui.themes.spacing import RADIUS_LG, RADIUS_SM
 from pert_analyzer.gui.themes.typography import (
+    BODY_SMALL_FONT,
     KPI_FONT,
     LABEL_FONT,
     MUTED_FONT,
@@ -70,7 +71,7 @@ class KpiCard(QFrame):
         super().__init__(parent)
         self.setObjectName("overviewKpiCard")
         self.setMinimumWidth(0)
-        self.setMinimumHeight(118)
+        self.setMinimumHeight(126)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.setStyleSheet(
             f"QFrame#overviewKpiCard {{ background-color: {SURFACE};"
@@ -103,9 +104,13 @@ class KpiCard(QFrame):
         top.addWidget(self._title_label, stretch=1)
         layout.addLayout(top)
         self._value_label = QLabel("Unavailable")
-        self._value_label.setFont(QFont(KPI_FONT[0], 34, QFont.Weight.Bold))
+        self._value_label.setFont(QFont(KPI_FONT[0], 14, QFont.Weight.Bold))
+        # NOTE: app-level QSS forces font-size 13px on all QWidget subclasses;
+        # an explicit px size in the widget stylesheet is the only way to keep
+        # the big KPI value visible.
         self._value_label.setStyleSheet(
             f"color: {accent}; border: none; background: transparent;"
+            f" font-size: 36px; font-weight: 700;"
         )
         layout.addWidget(self._value_label)
         bottom = QHBoxLayout()
@@ -134,6 +139,7 @@ class KpiCard(QFrame):
         self._value_label.setText(text)
         self._value_label.setStyleSheet(
             f"color: {color}; border: none; background: transparent;"
+            f" font-size: 36px; font-weight: 700;"
         )
 
     def set_note(self, text: str) -> None:
@@ -244,8 +250,8 @@ class OverviewTab(QWidget):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(5)
         kicker_label = QLabel(kicker.upper())
-        kicker_label.setFont(QFont(*MUTED_FONT))
-        kicker_label.setStyleSheet(f"color: {TEXT_MUTED};")
+        kicker_label.setFont(QFont(*BODY_SMALL_FONT))
+        kicker_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(kicker_label)
         title_label = QLabel(title)
         title_label.setFont(QFont(*STATUS_FONT))
@@ -262,8 +268,10 @@ class OverviewTab(QWidget):
         self._health_status.setStyleSheet(f"color: {SUCCESS};")
         header.addWidget(self._health_status)
         self._health_score = QLabel("100%")
-        self._health_score.setFont(QFont(KPI_FONT[0], 32, QFont.Weight.Bold))
-        self._health_score.setStyleSheet(f"color: {SUCCESS};")
+        self._health_score.setFont(QFont(KPI_FONT[0], 14, QFont.Weight.Bold))
+        self._health_score.setStyleSheet(
+            f"color: {SUCCESS}; font-size: 38px; font-weight: 700;"
+        )
         header.addWidget(self._health_score)
         self._health_score_caption = QLabel("All checks passed")
         self._health_score_caption.setFont(QFont(*MUTED_FONT))

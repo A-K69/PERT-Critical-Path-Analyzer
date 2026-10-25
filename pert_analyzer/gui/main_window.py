@@ -157,13 +157,14 @@ class MainWindow(QMainWindow):
         self._header_title.setStyleSheet(f"color: {TEXT}; border: none; background: transparent;")
         hdr_layout.addWidget(self._header_title)
 
-        hdr_layout.addStretch()
-
         self._locale_btn = QPushButton("عربي")
         self._locale_btn.setObjectName("secondary")
         self._locale_btn.setToolTip("Switch interface language and direction")
         self._locale_btn.clicked.connect(self._toggle_language)
         hdr_layout.addWidget(self._locale_btn)
+        hdr_layout.addSpacing(XXL)
+
+        hdr_layout.addStretch()
 
         self._workflow_indicator = QLabel()
         self._workflow_indicator.setFont(QFont(*BODY_SMALL_FONT))

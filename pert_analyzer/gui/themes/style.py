@@ -59,11 +59,13 @@ def _build_stylesheet() -> str:
     """Return the full application QSS built from design-system tokens."""
     return f"""
         /* ── Global defaults ────────────────────────────────── */
+        /* NOTE: no global font-size here — a 13px rule silently overrode
+           every constructor font (titles, display sizes, KPIs) and flattened
+           the whole typography system to a single size. */
         QWidget {{
             background-color: {BG};
             color: {TEXT};
             font-family: '{FONT_FAMILY}', 'Segoe UI', sans-serif;
-            font-size: 13px;
         }}
 
         /* ── Push buttons ───────────────────────────────────── */

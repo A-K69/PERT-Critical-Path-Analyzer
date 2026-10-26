@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -246,6 +246,12 @@ def _draw_arrowhead(
 class _ZoomableGraphicsView(QGraphicsView):
     """QGraphicsView with mouse-wheel zoom anchored under the cursor."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # True once the user zoomed manually (wheel or +/- buttons); the tab
+        # then stops re-fitting on show so it never fights the user.
+        self.user_zoomed = False
+
     def wheelEvent(self, event) -> None:  # noqa: N802
         factor = ZOOM_STEP if event.angleDelta().y() > 0 else 1.0 / ZOOM_STEP
         self._apply_zoom(factor)
@@ -255,6 +261,7 @@ class _ZoomableGraphicsView(QGraphicsView):
         new_zoom = max(MIN_ZOOM, min(MAX_ZOOM, current * factor))
         if abs(new_zoom - current) < 1e-9:
             return
+        self.user_zoomed = True
         self.scale(new_zoom / current, new_zoom / current)
 
 
@@ -323,8 +330,25 @@ class NetworkTab(QWidget):
             QGraphicsView.ViewportAnchor.AnchorUnderMouse
         )
         self._view.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
+        # The results dashboard stacks tab pages in a QStackedLayout that sizes
+        # every page to the tallest tab, so this canvas can be taller than the
+        # visible area.  Alignment Left|Top keeps the fitted graph at the top
+        # of the canvas — exactly the part the user sees first — instead of
+        # centering it in whichever oversized viewport slice is visible.
+        self._view.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
         self._view.setBackgroundBrush(_color("canvas"))
         root.addWidget(self._view, stretch=1)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        # fit_to_view() may have computed its zoom while this tab was hidden
+        # (data usually arrives before the tab is ever shown), which bakes a
+        # stale half-size transform in.  Refit once the real viewport size is
+        # known — but never override a manual zoom the user already chose.
+        if not self._view.user_zoomed:
+            QTimer.singleShot(0, self.fit_to_view)
 
     # ------------------------------------------------------------------
     # Data
@@ -578,6 +602,7 @@ class NetworkTab(QWidget):
             self._scene.itemsBoundingRect(),
             Qt.AspectRatioMode.KeepAspectRatio,
         )
+        self._view.user_zoomed = False
 
     def reset_zoom(self) -> None:
         self._view.resetTransform()

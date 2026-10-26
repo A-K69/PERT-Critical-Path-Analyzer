@@ -15,13 +15,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 
-from PySide6.QtGui import QColor, QPainter, QPixmap
+from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QApplication
 
 from pert_analyzer.gui.main_window import MainWindow
 from pert_analyzer.gui.navigation import NavDestination
 from pert_analyzer.gui.session import AppState
-from pert_analyzer.gui.themes.palette import BG
 from pert_analyzer.gui.themes.style import apply_theme
 from tests.helpers.reference_gold import (
     REFERENCE_AON,
@@ -48,23 +47,26 @@ def _grab(window: MainWindow, name: str) -> None:
     print(f"  saved {path}")
 
 
-def _grab_page(page_widget, name: str) -> None:
-    """Grab a child page for the docs set, composited over BG.
+def _grab_page(page_widget, name: str, window: MainWindow) -> None:
+    """Save one page (child widget) as a crop of the full-window grab.
 
-    QWidget::grab() of a non-top-level widget leaves genuinely unpainted
-    regions (scrollbar tracks, effect-buffer gaps) with alpha 0, which render
-    as white holes in image viewers.  On screen those regions show the window
-    background, so compositing over BG reproduces the app exactly while
-    producing a fully opaque RGB PNG.
+    A child widget's own grab() can render freshly-shown tab pages with stale
+    child geometry and can skip QGraphicsView viewport contents.  The window's
+    grab is the real on-screen composition, so cropping the page rect out of
+    it is both accurate and fully opaque.
     """
-    grabbed = page_widget.grab()
-    base = QPixmap(grabbed.size())
-    base.fill(QColor(BG))
-    painter = QPainter(base)
-    painter.drawPixmap(0, 0, grabbed)
-    painter.end()
+    win = window
+    full = win.grab().toImage()
+    dpr = full.devicePixelRatio() or 1.0
+    origin = page_widget.mapTo(win, QPoint(0, 0))
+    page = full.copy(
+        round(origin.x() * dpr),
+        round(origin.y() * dpr),
+        round(page_widget.width() * dpr),
+        round(page_widget.height() * dpr),
+    )
     path = OUT_DIR / f"{name}.png"
-    base.save(str(path))
+    page.save(str(path))
     print(f"  saved {path}")
 
 
@@ -176,6 +178,7 @@ def main() -> None:
     ]:
         results_page._tabs.setCurrentIndex(idx)
         app.processEvents()
+        pump(app, 320)
         if idx == 3:
             cp_tab = results_page._critical_paths
             if cp_tab._paths:
@@ -183,7 +186,8 @@ def main() -> None:
                 cp_tab.select_path(0)
                 cp_tab.repaint()
                 app.processEvents()
-        _grab_page(results_page, name)
+                pump(app, 320)
+        _grab_page(results_page, name, window)
 
     print("\nDone. Screenshots in:", OUT_DIR)
     return 0

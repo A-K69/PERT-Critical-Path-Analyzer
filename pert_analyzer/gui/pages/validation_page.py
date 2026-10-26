@@ -214,7 +214,25 @@ class ValidationPage(QWidget):
         return widget
 
     def _build_workspace(self) -> QWidget:
+        """Workspace wrapped in a scroll area.
+
+        The workspace content (banner + summary cards + issues + details +
+        action bar) is taller than the central area at common window sizes.
+        Without a scroll area the outer layout squeezed flexible rows until
+        checklist and detail labels collapsed to zero height and their text
+        vanished.  Scrolling keeps every row at its natural height.
+        """
+        host = QWidget()
+        host_layout = QVBoxLayout(host)
+        host_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        host_layout.addWidget(scroll)
+
         workspace = QWidget()
+        scroll.setWidget(workspace)
         outer = QVBoxLayout(workspace)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(8)
@@ -460,7 +478,7 @@ class ValidationPage(QWidget):
         bar.addWidget(self._continue_btn)
 
         outer.addLayout(bar)
-        return workspace
+        return host
 
     # ------------------------------------------------------------------
     # Refresh API

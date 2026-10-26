@@ -297,6 +297,7 @@ class OverviewTab(QWidget):
             f" border-radius: {RADIUS_SM}px; padding: 8px;"
         )
         layout.addWidget(self._health_checks)
+        layout.addStretch(1)
         return panel
 
     def _build_paths_panel(self) -> QFrame:
@@ -324,6 +325,7 @@ class OverviewTab(QWidget):
             f" border-radius: {RADIUS_SM}px; padding: 7px;"
         )
         layout.addWidget(self._more_paths)
+        layout.addStretch(1)
         return panel
 
     def _build_composition_panel(self) -> QFrame:

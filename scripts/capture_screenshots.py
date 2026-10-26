@@ -1,4 +1,4 @@
-"""
+﻿"""
 Capture screenshots of every GUI page using the reference AON workflow.
 Run with: python scripts/capture_screenshots.py
 """
@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -14,11 +15,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication
 
 from pert_analyzer.gui.main_window import MainWindow
 from pert_analyzer.gui.navigation import NavDestination
 from pert_analyzer.gui.session import AppState
+from pert_analyzer.gui.themes.palette import BG
 from pert_analyzer.gui.themes.style import apply_theme
 from tests.helpers.reference_gold import (
     REFERENCE_AON,
@@ -30,10 +33,38 @@ OUT_DIR = _ROOT / "docs" / "ui_review" / "final"
 _workflow = None
 
 
+def pump(app: QApplication, ms: int = 320) -> None:
+    """Pump the event loop for wall-clock ms so the nav fade can finish."""
+    end = time.monotonic() + ms / 1000.0
+    while time.monotonic() < end:
+        app.processEvents()
+        time.sleep(0.004)
+
+
 def _grab(window: MainWindow, name: str) -> None:
     pixmap = window.grab()
     path = OUT_DIR / f"{name}.png"
     pixmap.save(str(path))
+    print(f"  saved {path}")
+
+
+def _grab_page(page_widget, name: str) -> None:
+    """Grab a child page for the docs set, composited over BG.
+
+    QWidget::grab() of a non-top-level widget leaves genuinely unpainted
+    regions (scrollbar tracks, effect-buffer gaps) with alpha 0, which render
+    as white holes in image viewers.  On screen those regions show the window
+    background, so compositing over BG reproduces the app exactly while
+    producing a fully opaque RGB PNG.
+    """
+    grabbed = page_widget.grab()
+    base = QPixmap(grabbed.size())
+    base.fill(QColor(BG))
+    painter = QPainter(base)
+    painter.drawPixmap(0, 0, grabbed)
+    painter.end()
+    path = OUT_DIR / f"{name}.png"
+    base.save(str(path))
     print(f"  saved {path}")
 
 
@@ -91,38 +122,45 @@ def main() -> None:
     print("\nCapturing: 01_analyze")
     window._on_nav(NavDestination.ANALYZE)
     app.processEvents()
+    pump(app, 320)
     analyze_page = window._analysis_page
     app.processEvents()
+    pump(app, 320)
     gui_sess = window._session
     summary = getattr(gui_sess, "review_summary", None) or {}
     count = summary.get("total_activities") or None
     analyze_page.set_analysis_result_status("REVIEW_REQUIRED", activity_count=count)
     analyze_page.show_completed(_workflow, review_item_total=gui_sess.review_item_total())
     app.processEvents()
+    pump(app, 320)
     _grab(window, "01_analyze")
 
     # 2. Understanding page
     print("Capturing: 02_understanding")
     window._on_nav(NavDestination.UNDERSTANDING)
     app.processEvents()
+    pump(app, 320)
     _grab(window, "02_understanding")
 
     # 3. Review Center
     print("Capturing: 03_review")
     window._on_nav(NavDestination.REVIEW)
     app.processEvents()
+    pump(app, 320)
     _grab(window, "03_review")
 
     # 4. Validation page
     print("Capturing: 04_validation")
     window._on_nav(NavDestination.VALIDATE)
     app.processEvents()
+    pump(app, 320)
     _grab(window, "04_validation")
 
     # 5. Results Overview
     print("Capturing: 05_results_overview")
     window._on_nav(NavDestination.RESULTS)
     app.processEvents()
+    pump(app, 320)
     _grab(window, "05_results_overview")
 
     # 6. Results sub-tabs
@@ -145,10 +183,7 @@ def main() -> None:
                 cp_tab.select_path(0)
                 cp_tab.repaint()
                 app.processEvents()
-        img = results_page.grab()
-        path = OUT_DIR / f"{name}.png"
-        img.save(str(path))
-        print(f"  saved {path}")
+        _grab_page(results_page, name)
 
     print("\nDone. Screenshots in:", OUT_DIR)
     return 0
@@ -156,3 +191,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+

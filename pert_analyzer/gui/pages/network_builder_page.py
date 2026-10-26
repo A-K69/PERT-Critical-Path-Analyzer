@@ -197,6 +197,7 @@ class NetworkBuilderPage(QWidget):
         scroll.setWidget(self._activity_container)
         scroll.setStyleSheet(
             f"QScrollArea {{ border: none; background: transparent; }}"
+            f"QScrollArea > QWidget {{ background: transparent; }}"
         )
         layout.addWidget(scroll, stretch=1)
 

@@ -68,6 +68,22 @@ def _build_stylesheet() -> str:
             font-family: '{FONT_FAMILY}', 'Segoe UI', sans-serif;
         }}
 
+        /* Display-leaf widgets never paint their own background.  Without
+           this, every QLabel inherited the app background color and painted
+           a dark box behind each text line (banners, panels, cards).  Labels
+           that intentionally carry a background set it in their own
+           stylesheet, which always wins over the app-level rule. */
+        QLabel, QCheckBox, QRadioButton {{
+            background: transparent;
+        }}
+
+        /* Content widgets placed inside a scroll area also stay transparent
+           so the surrounding page/card background shows through instead of
+           a dark viewport-coloured rectangle. */
+        QScrollArea > QWidget > QWidget {{
+            background: transparent;
+        }}
+
         /* ── Push buttons ───────────────────────────────────── */
         QPushButton {{
             background-color: {SURFACE_LIGHT};
@@ -269,6 +285,7 @@ def _build_stylesheet() -> str:
             border: 1px solid {BORDER};
             border-radius: {RADIUS_MD}px;
             gridline-color: {BORDER};
+            alternate-background-color: {SURFACE_LIGHT};
         }}
         QTableWidget::item {{
             padding: 5px 8px;

@@ -438,6 +438,18 @@ class MainWindow(QMainWindow):
             animation.setStartValue(0.4)
             animation.setEndValue(1.0)
             animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+            # Drop the effect once the fade completes.  A lingering
+            # QGraphicsOpacityEffect forces every later QWidget::grab()/render()
+            # through an offscreen buffer whose unpainted regions return with
+            # alpha 0 — turning page grabs (screenshots) transparent.  At
+            # opacity 1.0 the effect is visually a no-op, so removing it is
+            # invisible on screen.
+            def _drop_fade_effect(widget=widget, effect=effect) -> None:
+                if widget.graphicsEffect() is effect:
+                    widget.setGraphicsEffect(None)
+
+            animation.finished.connect(_drop_fade_effect)
             animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
             widget._fade_effect = effect  # keep references alive
             widget._fade_animation = animation

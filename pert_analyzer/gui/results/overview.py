@@ -223,8 +223,9 @@ class OverviewTab(QWidget):
         content = QGridLayout()
         content.setHorizontalSpacing(10)
         content.setVerticalSpacing(10)
-        content.addWidget(self._build_health_panel(), 0, 0, 1, 3)
-        content.addWidget(self._build_paths_panel(), 0, 3, 1, 2)
+        # wider snapshot column: full-length routes then wrap to one line
+        content.addWidget(self._build_health_panel(), 0, 0, 1, 2)
+        content.addWidget(self._build_paths_panel(), 0, 2, 1, 3)
         content.addWidget(self._build_composition_panel(), 1, 0, 1, 2)
         content.addWidget(self._build_confidence_panel(), 1, 2, 1, 2)
         content.addWidget(self._build_action_panel(), 1, 4, 1, 1)
@@ -282,13 +283,6 @@ class OverviewTab(QWidget):
         self._health_button.clicked.connect(self.open_validation_requested)
         header.addWidget(self._health_button)
         layout.addLayout(header)
-        self._health_description = QLabel(
-            "All review decisions are applied, the graph is valid, and CPM has produced the current schedule."
-        )
-        self._health_description.setWordWrap(True)
-        self._health_description.setFont(QFont(*MUTED_FONT))
-        self._health_description.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        layout.addWidget(self._health_description)
         self._health_checks = QLabel("")
         self._health_checks.setWordWrap(True)
         self._health_checks.setFont(QFont(*MUTED_FONT))
@@ -303,17 +297,18 @@ class OverviewTab(QWidget):
     def _build_paths_panel(self) -> QFrame:
         panel = _Panel()
         layout = self._panel_heading(panel, "Critical structure", "Critical path snapshot")
-        header = QHBoxLayout()
-        header.addStretch()
-        self._paths_button = self._action_button("Compare all paths")
-        self._paths_button.clicked.connect(self.open_paths_requested)
-        header.addWidget(self._paths_button)
-        layout.addLayout(header)
+        # summary and button share one row; the route list below stays compact
+        summary_row = QHBoxLayout()
+        summary_row.setSpacing(10)
         self._paths_summary = QLabel("No critical paths available.")
         self._paths_summary.setWordWrap(True)
         self._paths_summary.setFont(QFont(*MUTED_FONT))
         self._paths_summary.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        layout.addWidget(self._paths_summary)
+        summary_row.addWidget(self._paths_summary, stretch=1)
+        self._paths_button = self._action_button("Compare all paths")
+        self._paths_button.clicked.connect(self.open_paths_requested)
+        summary_row.addWidget(self._paths_button)
+        layout.addLayout(summary_row)
         self._path_rows = QVBoxLayout()
         self._path_rows.setSpacing(0)
         layout.addLayout(self._path_rows)
@@ -331,6 +326,8 @@ class OverviewTab(QWidget):
     def _build_composition_panel(self) -> QFrame:
         panel = _Panel()
         layout = self._panel_heading(panel, "Network composition", "How the project is shaped")
+        row = QHBoxLayout()
+        row.setSpacing(10)
         self._composition = QLabel("")
         self._composition.setWordWrap(True)
         self._composition.setFont(QFont(*MUTED_FONT))
@@ -338,13 +335,11 @@ class OverviewTab(QWidget):
             f"color: {TEXT_SECONDARY}; background-color: {SURFACE_LIGHT};"
             f" border-radius: {RADIUS_SM}px; padding: 10px;"
         )
-        layout.addWidget(self._composition)
-        button_row = QHBoxLayout()
-        button_row.addStretch()
+        row.addWidget(self._composition, stretch=1)
         button = self._action_button("Open Activities")
         button.clicked.connect(self.open_activities_requested)
-        button_row.addWidget(button)
-        layout.addLayout(button_row)
+        row.addWidget(button)
+        layout.addLayout(row)
         return panel
 
     def _build_confidence_panel(self) -> QFrame:
@@ -353,10 +348,7 @@ class OverviewTab(QWidget):
         self._confidence = QLabel("")
         self._confidence.setWordWrap(True)
         self._confidence.setFont(QFont(*MUTED_FONT))
-        self._confidence.setStyleSheet(
-            f"color: {TEXT_SECONDARY}; background-color: {SURFACE_LIGHT};"
-            f" border-radius: {RADIUS_SM}px; padding: 10px;"
-        )
+        self._confidence.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(self._confidence)
         self._confidence_bar = QProgressBar()
         self._confidence_bar.setRange(0, 3)
@@ -364,7 +356,7 @@ class OverviewTab(QWidget):
         self._confidence_bar.setTextVisible(False)
         self._confidence_bar.setToolTip("Verified readiness checks")
         layout.addWidget(self._confidence_bar)
-        self._confidence_caption = QLabel("Verified readiness checks: 0 / 3")
+        self._confidence_caption = QLabel("3 / 3 readiness checks passed")
         self._confidence_caption.setFont(QFont(*MUTED_FONT))
         self._confidence_caption.setStyleSheet(f"color: {TEXT_MUTED};")
         layout.addWidget(self._confidence_caption)
@@ -373,6 +365,8 @@ class OverviewTab(QWidget):
     def _build_action_panel(self) -> QFrame:
         panel = _Panel()
         layout = self._panel_heading(panel, "Next useful action", "Explore the schedule")
+        row = QHBoxLayout()
+        row.setSpacing(10)
         self._next_action = QLabel("")
         self._next_action.setWordWrap(True)
         self._next_action.setFont(QFont(*MUTED_FONT))
@@ -380,10 +374,11 @@ class OverviewTab(QWidget):
             f"color: {TEXT_SECONDARY}; background-color: {_rgba(WARNING, 24)};"
             f" border-left: 3px solid {WARNING}; border-radius: {RADIUS_SM}px; padding: 10px;"
         )
-        layout.addWidget(self._next_action)
+        row.addWidget(self._next_action, stretch=1)
         button = self._action_button("Go to Critical Paths")
         button.clicked.connect(self.open_paths_requested)
-        layout.addWidget(button)
+        row.addWidget(button)
+        layout.addLayout(row)
         return panel
 
     def set_data(self, data: Any, session: Any = None) -> None:
@@ -392,8 +387,8 @@ class OverviewTab(QWidget):
         self._session = session
         path_count = data.critical_path_count or 0
         self._kpi_cards["duration"].set_value(format_duration(data.project_duration), ACCENT)
-        self._kpi_cards["duration"].set_note("days · CPM verified")
-        self._kpi_cards["duration"].set_trend("● verified")
+        self._kpi_cards["duration"].set_note("CPM verified")
+        self._kpi_cards["duration"].set_trend("")
         self._kpi_cards["activities"].set_value(str(data.activity_count), ACCENT)
         self._kpi_cards["activities"].set_note("reviewed activities")
         self._kpi_cards["activities"].set_trend("100% reviewed")
@@ -425,21 +420,17 @@ class OverviewTab(QWidget):
         )
         non_critical = max(0, data.activity_count - data.critical_activity_count)
         self._composition.setText(
-            f"<b>{data.activity_count} reviewed activities</b><br>"
-            "<b>unique dependencies</b>&nbsp;&nbsp;&nbsp;"
-            f"<font color='{TEXT}'><b>{data.dependency_count}</b></font><br>"
-            "<b>activities with zero float</b>&nbsp;&nbsp;&nbsp;"
-            f"<font color='{WARNING}'><b>{data.critical_activity_count}</b></font><br>"
-            "<b>non-critical activities</b>&nbsp;&nbsp;&nbsp;"
-            f"<font color='{TEXT}'><b>{non_critical}</b></font>"
+            f"<b>{data.activity_count} reviewed activities</b> · "
+            f"<b>{data.dependency_count}</b> unique dependencies<br>"
+            f"zero-float <font color='{WARNING}'><b>{data.critical_activity_count}</b></font>"
+            f" · non-critical <b>{non_critical}</b>"
         )
         self._confidence.setText(
-            "<b>Calculation source</b>&nbsp;&nbsp; Backend CPM<br>"
-            f"<b>Graph state</b>&nbsp;&nbsp; <font color='{SUCCESS}'>Valid</font><br>"
-            f"<b>Result authority</b>&nbsp;&nbsp; <font color='{SUCCESS}'>Authoritative</font>"
+            "Calculation source <b>Backend CPM</b> · "
+            f"<font color='{SUCCESS}'>Graph valid</font> · Result authoritative"
         )
         self._confidence_bar.setValue(3)
-        self._confidence_caption.setText("Verified readiness checks: 3 / 3 passed")
+        self._confidence_caption.setText("3 / 3 readiness checks passed")
         self._next_action.setText(
             f"There are {path_count} equal-duration critical route(s). "
             "Compare their branches, then inspect any activity in Network."
@@ -480,17 +471,14 @@ class OverviewTab(QWidget):
                 f" border-radius: {RADIUS_SM}px;"
             )
             row_layout.addWidget(rank)
-            info = QLabel(
-                f"{route}\n{len(path)} activities · zero float · representative route"
-            )
-            info.setWordWrap(True)
-            info.setFont(QFont(*MUTED_FONT))
-            info.setStyleSheet(f"color: {TEXT_SECONDARY};")
-            row_layout.addWidget(info, stretch=1)
-            duration = QLabel(format_duration(data.project_duration))
-            duration.setFont(QFont(*STATUS_FONT))
-            duration.setStyleSheet(f"color: {WARNING};")
-            row_layout.addWidget(duration)
+            # single compact line-pair: the full route only.  The per-row
+            # "N activities · zero float" caption was dropped — it repeated
+            # the panel summary for every route.
+            route_label = QLabel(route)
+            route_label.setWordWrap(True)
+            route_label.setFont(QFont(*MUTED_FONT))
+            route_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
+            row_layout.addWidget(route_label, stretch=1)
             self._path_rows.addWidget(row)
 
     def kpi_cards(self) -> dict[str, KpiCard]:

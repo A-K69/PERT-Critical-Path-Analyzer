@@ -147,8 +147,15 @@ class PertTab(QWidget):
         )
         self._estimates_table.verticalHeader().setVisible(False)
         header = self._estimates_table.horizontalHeader()
+        # Balanced entry grid: compact auto-sized ID plus three equal O/M/P
+        # columns sharing the width.  The previous Interactive +
+        # stretched-last-section setup squeezed O/M to their defaults while
+        # P swallowed the remaining ~1100px.
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        header.setStretchLastSection(True)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        for col in (1, 2, 3):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
+        header.setStretchLastSection(False)
         self._estimates_table.setStyleSheet(
             f"QTableWidget {{ background-color: {SURFACE_LIGHT};"
             f" border: 1px solid {BORDER}; border-radius: 6px;}}"
@@ -220,8 +227,14 @@ class PertTab(QWidget):
         self._results_table.verticalHeader().setVisible(False)
         self._results_table.setSortingEnabled(True)
         rheader = self._results_table.horizontalHeader()
+        # Same balanced treatment as the estimates table: fixed ID, the
+        # remaining result columns share the width equally.
         rheader.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        rheader.setStretchLastSection(True)
+        rheader.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        rheader.resizeSection(0, 52)
+        for col in range(1, len(RESULT_COLUMNS)):
+            rheader.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
+        rheader.setStretchLastSection(False)
         self._results_table.setStyleSheet(
             f"QTableWidget {{ background-color: {SURFACE_LIGHT};"
             f" border: 1px solid {BORDER}; border-radius: 6px;}}"
@@ -442,7 +455,6 @@ class PertTab(QWidget):
         for col, (text, value) in enumerate(values):
             item = _numeric_item(text, value)
             self._results_table.setItem(row, col, item)
-        self._results_table.horizontalHeader().resizeSection(0, 48)
 
     def _clear_results(self) -> None:
         for card in self._kpi_cards.values():

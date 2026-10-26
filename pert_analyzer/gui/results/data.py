@@ -293,8 +293,7 @@ def _int_or_none(value: Any) -> Optional[int]:
 PERT_NO_DATA_TITLE = "PERT estimates are not available for this analysis."
 PERT_NO_DATA_HINT = (
     "This project currently uses deterministic activity durations. "
-    "To run PERT analysis, enter optimistic, most-likely, and pessimistic "
-    "duration estimates for each activity in the table above."
+    "Add three-point estimates in the table below, then run PERT."
 )
 
 

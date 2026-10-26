@@ -94,6 +94,10 @@ class ActivitiesTab(QWidget):
         for col in (0, 1, 2, 3, 4, 5, 6, 7, 8):
             header.resizeSection(col, 54 if col in (2, 3, 4, 5) else 60)
         header.setStretchLastSection(True)
+        # Default sort indicator: later clicks start ascending.  Populated rows
+        # are re-sorted by this indicator in set_data, so the table opens on
+        # the scan order (A -> V) instead of the header's descending default.
+        header.setSortIndicator(0, Qt.SortOrder.AscendingOrder)
         self._table.setStyleSheet(
             f"QTableWidget {{ background-color: {SURFACE};"
             f" border: 1px solid {BORDER}; border-radius: 8px;}}"
@@ -118,9 +122,23 @@ class ActivitiesTab(QWidget):
         self._empty_label.setWordWrap(True)
         self._empty_label.hide()
         root.addWidget(self._empty_label)
-        root.addWidget(self._table, stretch=2)
 
-        root.addWidget(self._build_detail_panel())
+        # Horizontal split: the table owns the full page height (scrolls
+        # internally instead of being squeezed by the detail block below it),
+        # and the read-only detail panel sits beside it, always visible.
+        panel = self._build_detail_panel()
+        panel.setMinimumWidth(300)
+        panel.setMaximumWidth(340)
+        split = QHBoxLayout()
+        split.setContentsMargins(0, 0, 0, 0)
+        split.setSpacing(10)
+        split.addWidget(self._table, stretch=1)
+        side = QVBoxLayout()
+        side.setContentsMargins(0, 0, 0, 0)
+        side.addWidget(panel)
+        side.addStretch(1)
+        split.addLayout(side)
+        root.addLayout(split, stretch=1)
 
     def _build_detail_panel(self) -> QWidget:
         panel = QFrame()
@@ -178,6 +196,10 @@ class ActivitiesTab(QWidget):
             grid.addWidget(lab, row * 2, column * 2)
             grid.addWidget(value, row * 2 + 1, column * 2)
             self._detail_fields[key] = value
+        # value columns take the leftover panel width so long lists
+        # ("S, R", "O, P") wrap inside the column instead of widening it
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
         layout.addLayout(grid)
         return panel
 

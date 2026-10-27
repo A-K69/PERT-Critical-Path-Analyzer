@@ -11,8 +11,15 @@ import logging
 import math
 from typing import Any, Optional
 
-from PySide6.QtCore import QPointF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPolygonF
+from PySide6.QtCore import QPointF, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QPainter,
+    QPen,
+    QPolygonF,
+    QTextOption,
+)
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsPolygonItem,
@@ -34,7 +41,6 @@ from pert_analyzer.gui.builder.model import ManualNetworkModel
 from pert_analyzer.gui.results import layout as network_layout
 from pert_analyzer.gui.themes.palette import (
     ACCENT,
-    BG,
     BORDER,
     DANGER,
     ELEVATED,
@@ -77,6 +83,15 @@ class NetworkBuilderPage(QWidget):
         self._model = ManualNetworkModel(self)
         self._setup_ui()
         self._connect_signals()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        # fit_graph() may have computed its transform while this page was
+        # still hidden and unsized (during construction), which bakes a
+        # stale oversized zoom in.  Refit once the real viewport size is
+        # known — but never override a manual zoom the user already chose.
+        if not self._user_zoomed:
+            QTimer.singleShot(0, self._on_fit)
 
     @property
     def model(self) -> ManualNetworkModel:
@@ -152,6 +167,14 @@ class NetworkBuilderPage(QWidget):
         # ── Bottom: Relationships + Status + Actions ─────────
         bottom = self._build_bottom_section()
         root.addWidget(bottom)
+
+        # The model emits nothing at construction time, so the page would
+        # otherwise come up with a blank canvas (no guidance), a Calculate
+        # CPM button that still looks enabled, and stale counts.  Sync once.
+        self._graph_nodes = {}
+        self._graph_edges = []
+        self._user_zoomed = False
+        self._on_model_changed()
 
     def _build_left_panel(self) -> QWidget:
         """Activity table panel."""
@@ -235,31 +258,36 @@ class NetworkBuilderPage(QWidget):
         header_row.addStretch()
 
         self._graph_zoom_in = QPushButton("+")
-        self._graph_zoom_in.setFixedSize(28, 28)
+        self._graph_zoom_in.setFixedSize(30, 30)
         self._graph_zoom_in.setFont(QFont(*BUTTON_FONT))
         self._graph_zoom_in.setStyleSheet(
-            f"QPushButton {{ background: {SURFACE_LIGHT}; color: {TEXT};"
-            f" border: 1px solid {BORDER}; border-radius: 4px; }}"
+            f"QPushButton {{ background: {ELEVATED}; color: {TEXT};"
+            f" border: 1px solid {BORDER}; border-radius: 6px;"
+            f" padding: 0px; min-height: 0px; font-weight: 700; }}"
+            f"QPushButton:hover {{ background: {BORDER}; }}"
         )
         self._graph_zoom_in.clicked.connect(self._on_zoom_in)
         header_row.addWidget(self._graph_zoom_in)
 
         self._graph_zoom_out = QPushButton("\u2212")
-        self._graph_zoom_out.setFixedSize(28, 28)
+        self._graph_zoom_out.setFixedSize(30, 30)
         self._graph_zoom_out.setFont(QFont(*BUTTON_FONT))
         self._graph_zoom_out.setStyleSheet(
-            f"QPushButton {{ background: {SURFACE_LIGHT}; color: {TEXT};"
-            f" border: 1px solid {BORDER}; border-radius: 4px; }}"
+            f"QPushButton {{ background: {ELEVATED}; color: {TEXT};"
+            f" border: 1px solid {BORDER}; border-radius: 6px;"
+            f" padding: 0px; min-height: 0px; font-weight: 700; }}"
+            f"QPushButton:hover {{ background: {BORDER}; }}"
         )
         self._graph_zoom_out.clicked.connect(self._on_zoom_out)
         header_row.addWidget(self._graph_zoom_out)
 
         self._graph_fit = QPushButton("Fit")
-        self._graph_fit.setFont(QFont(*MUTED_FONT))
+        self._graph_fit.setFont(QFont(*STATUS_FONT))
         self._graph_fit.setStyleSheet(
-            f"QPushButton {{ background: {SURFACE_LIGHT}; color: {TEXT};"
-            f" border: 1px solid {BORDER}; border-radius: 4px;"
-            f" padding: 2px 8px; }}"
+            f"QPushButton {{ background: {ELEVATED}; color: {TEXT};"
+            f" border: 1px solid {BORDER}; border-radius: 6px;"
+            f" padding: 5px 12px; font-weight: 600; }}"
+            f"QPushButton:hover {{ background: {BORDER}; }}"
         )
         self._graph_fit.clicked.connect(self._on_fit)
         header_row.addWidget(self._graph_fit)
@@ -304,6 +332,11 @@ class NetworkBuilderPage(QWidget):
         self._inspector_content.setStyleSheet(f"color: {TEXT_MUTED}; padding: 20px;")
         self._inspector_content.setWordWrap(True)
         layout.addWidget(self._inspector_content, stretch=1)
+
+        # Contextual actions for whatever the inspector is showing
+        # (e.g. a Delete relationship button while an edge is selected).
+        self._inspector_action_layout = QHBoxLayout()
+        layout.addLayout(self._inspector_action_layout)
 
         return panel
 
@@ -369,6 +402,8 @@ class NetworkBuilderPage(QWidget):
             f" border: none; border-radius: 4px; padding: 4px 10px;"
             f" font-weight: 600; }}"
             f"QPushButton:hover {{ background: {ACCENT}DD; }}"
+            f"QPushButton:disabled {{ background: {TEXT_MUTED};"
+            f" color: {SURFACE}; }}"
         )
         self._add_rel_btn.clicked.connect(self._on_add_relationship)
         rel_header.addWidget(self._add_rel_btn)
@@ -655,6 +690,7 @@ class NetworkBuilderPage(QWidget):
         self._acts_count_label.setText(f"Activities: {self._model.activity_count}")
         self._deps_count_label.setText(f"Dependencies: {self._model.dependency_count}")
         self._calculate_btn.setEnabled(self._model.activity_count > 0)
+        self._add_rel_btn.setEnabled(self._model.activity_count > 0)
         self._update_relationships_display()
         self._update_graph_display()
         self._update_state_badge()
@@ -770,6 +806,9 @@ class NetworkBuilderPage(QWidget):
         self._status_text.setStyleSheet(f"color: {SUCCESS};")
         self._calculate_btn.setText("Recalculate CPM")
         self._update_state_badge()
+        # A CPM result is new data the open inspector should show at once.
+        if self._model.selected_activity is not None:
+            self._update_inspector_activity(self._model.selected_activity)
 
     def _on_cpm_invalidated(self) -> None:
         self._analyze_btn.setEnabled(self._model.is_valid)
@@ -781,6 +820,8 @@ class NetworkBuilderPage(QWidget):
         self._status_text.setStyleSheet(f"color: {WARNING};")
         self._calculate_btn.setText("Recalculate CPM")
         self._update_state_badge()
+        if self._model.selected_activity is not None:
+            self._update_inspector_activity(self._model.selected_activity)
 
     def _on_selection_changed(self, item_type: str, item_id: str) -> None:
         if item_type == "activity":
@@ -789,6 +830,20 @@ class NetworkBuilderPage(QWidget):
             self._update_inspector_relationship(item_id)
         else:
             self._reset_inspector()
+        self._refresh_graph_selection()
+
+    def _refresh_graph_selection(self) -> None:
+        """Re-apply the highlight to the existing scene items in place.
+
+        Deliberately NOT a scene rebuild: clearing the scene from inside a
+        click handler (mousePressEvent of a live item) is unsafe and would
+        kill the rubber-band interplay at the same time."""
+        selected = self._model.selected_activity
+        selected_rel = self._model.selected_relationship
+        for aid, node in self._graph_nodes.items():
+            node.set_selected(selected == aid)
+        for edge in self._graph_edges:
+            edge.set_selected(selected_rel == (edge._source, edge._target))
 
     def _on_activity_added(self, activity_id: str) -> None:
         pass  # Row is added in _on_add_activity
@@ -817,6 +872,7 @@ class NetworkBuilderPage(QWidget):
         if entry is None:
             self._reset_inspector()
             return
+        self._clear_inspector_actions()
 
         preds = self._model.get_predecessors(activity_id)
         succs = self._model.get_successors(activity_id)
@@ -868,6 +924,44 @@ class NetworkBuilderPage(QWidget):
         self._inspector_content.setText("".join(lines))
         self._inspector_content.setTextFormat(Qt.TextFormat.RichText)
 
+    def _add_inspector_delete_relationship(self, src: str, tgt: str) -> None:
+        """Offer a direct way to remove the relationship being inspected."""
+        delete_btn = QPushButton("Delete relationship")
+        delete_btn.setFont(QFont(*STATUS_FONT))
+        delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        delete_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {DANGER};"
+            f" border: 1px solid {DANGER}66; border-radius: 6px;"
+            f" padding: 5px 10px; font-weight: 600; }}"
+            f"QPushButton:hover {{ background: {DANGER}22;"
+            f" border: 1px solid {DANGER}; }}"
+        )
+        delete_btn.clicked.connect(
+            lambda checked=False, s=src, t=tgt: self._on_delete_relationship(s, t)
+        )
+        self._inspector_action_layout.addWidget(delete_btn)
+        self._inspector_action_layout.addStretch()
+
+    def _clear_inspector_actions(self) -> None:
+        while self._inspector_action_layout.count():
+            item = self._inspector_action_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+
+    def _on_delete_relationship(self, source: str, target: str) -> None:
+        err = self._model.remove_relationship(source, target)
+        if err:
+            QMessageBox.warning(self, "Remove Relationship", err)
+
+    def _reset_inspector(self) -> None:
+        self._inspector_content.setText(
+            "Select an activity or relationship\nfrom the network to inspect it."
+        )
+        self._inspector_content.setTextFormat(Qt.TextFormat.PlainText)
+        self._clear_inspector_actions()
+
     def _update_inspector_relationship(self, item_id: str) -> None:
         parts = item_id.split("\u2192")
         if len(parts) != 2:
@@ -885,12 +979,8 @@ class NetworkBuilderPage(QWidget):
         ]
         self._inspector_content.setText("".join(lines))
         self._inspector_content.setTextFormat(Qt.TextFormat.RichText)
-
-    def _reset_inspector(self) -> None:
-        self._inspector_content.setText(
-            "Select an activity or relationship\nfrom the network to inspect it."
-        )
-        self._inspector_content.setTextFormat(Qt.TextFormat.PlainText)
+        self._clear_inspector_actions()
+        self._add_inspector_delete_relationship(src, tgt)
 
     def _update_graph_display(self) -> None:
         """Render the live AON network as real nodes and dependency arrows."""
@@ -898,13 +988,15 @@ class NetworkBuilderPage(QWidget):
         acts = self._model.get_all_activities()
         rels = self._model.get_all_relationships()
         if not acts:
-            hint = QGraphicsTextItem("Network graph will appear here\nas you add activities.")
-            hint.setDefaultTextColor(QColor(TEXT_MUTED))
-            f = hint.font()
-            f.setPointSize(11)
-            hint.setFont(f)
-            self._graph_scene.addItem(hint)
+            # Dead maps would keep pointing at cleared scene items and
+            # make every later count stale — wipe them with the canvas.
+            self._graph_nodes = {}
+            self._graph_edges = []
+            self._build_empty_canvas_hint()
             self._graph_view.setSceneRect(self._graph_scene.itemsBoundingRect())
+            # A cleared canvas is a fundamentally new content state: any
+            # previous zoom makes no sense for the guidance composition.
+            self._user_zoomed = False
             self.fit_graph()
             return
 
@@ -941,7 +1033,76 @@ class NetworkBuilderPage(QWidget):
         self._graph_view.setSceneRect(
             self._graph_scene.itemsBoundingRect().adjusted(-30, -30, 30, 30)
         )
-        self.fit_graph()
+        if not self._user_zoomed:
+            self.fit_graph()
+        # fit_in_view leaves a round-off pixel or two inside the bars;
+        # reset them so no scrollbar ghosts the canvas edge.
+        self._graph_view.horizontalScrollBar().setValue(0)
+        self._graph_view.verticalScrollBar().setValue(0)
+        # First meaningful content: point the inspector at the first activity
+        # instead of greeting a populated network with "select something".
+        if (self._model.selected_activity is None
+                and self._model.selected_relationship is None):
+            self._model.select_activity(next(iter(self._graph_nodes)))
+
+    def _build_empty_canvas_hint(self) -> None:
+        """Compose the first-time guidance: a mini AON glyph plus copy.
+
+        Drawn with the very same node/edge primitives the live network
+        uses, so the canvas demonstrates the product instead of going
+        quiet until the first click."""
+        positions = {
+            "A": (150, 26, 64, 34),
+            "B": (356, 26, 64, 34),
+            "C": (253, 106, 64, 34),
+        }
+        durations = {"A": 1, "B": 2, "C": 2}
+        for aid, (x, y, w, h) in positions.items():
+            node = _GraphNodeItem(aid, x, y, w, h)
+            # Decorative props, not live widgets: ignore clicks.
+            node.setFlag(
+                QGraphicsRectItem.GraphicsItemFlag.ItemIsSelectable, False
+            )
+            node.set_metrics(
+                duration=durations[aid], is_critical=False, is_selected=False
+            )
+            self._graph_scene.addItem(node)
+        for src, tgt in (("A", "B"), ("A", "C"), ("B", "C")):
+            start, end = network_layout.edge_points(positions, src, tgt)
+            edge = _GraphEdgeItem(src, tgt, start, end)
+            edge.setFlag(
+                QGraphicsRectItem.GraphicsItemFlag.ItemIsSelectable, False
+            )
+            self._graph_scene.addItem(edge)
+
+        cx = 285  # glyph horizontal center (150..420)
+        title = QGraphicsTextItem("Your network takes shape here")
+        title.setDefaultTextColor(QColor(TEXT))
+        f = title.font()
+        f.setPointSize(11)
+        f.setBold(True)
+        title.setFont(f)
+        title.setTextWidth(340)
+        title.document().setDefaultTextOption(
+            QTextOption(Qt.AlignmentFlag.AlignHCenter)
+        )
+        title.setPos(cx - 170, 154)
+        self._graph_scene.addItem(title)
+
+        subtitle = QGraphicsTextItem(
+            "Add an activity on the left, or press Load Example below "
+            "to start from the reference network."
+        )
+        subtitle.setDefaultTextColor(QColor(TEXT_MUTED))
+        f2 = subtitle.font()
+        f2.setPointSize(10)
+        subtitle.setFont(f2)
+        subtitle.setTextWidth(360)
+        subtitle.document().setDefaultTextOption(
+            QTextOption(Qt.AlignmentFlag.AlignHCenter)
+        )
+        subtitle.setPos(cx - 180, 186)
+        self._graph_scene.addItem(subtitle)
 
     def fit_graph(self) -> None:
         try:
@@ -953,12 +1114,15 @@ class NetworkBuilderPage(QWidget):
             pass
 
     def _on_zoom_in(self) -> None:
+        self._user_zoomed = True
         self._graph_view.scale(1.2, 1.2)
 
     def _on_zoom_out(self) -> None:
+        self._user_zoomed = True
         self._graph_view.scale(1.0 / 1.2, 1.0 / 1.2)
 
     def _on_fit(self) -> None:
+        self._user_zoomed = False
         self.fit_graph()
 
     # ── Action handlers ──────────────────────────────────────
@@ -1020,7 +1184,12 @@ class NetworkBuilderPage(QWidget):
 
         self._on_model_changed()
         self._on_validation_changed()
-        self._reset_inspector()
+        # _on_model_changed may have auto-selected the first activity and
+        # already filled the inspector — only reset it when nothing is
+        # selected (e.g. the model was cleared).
+        if (self._model.selected_activity is None
+                and self._model.selected_relationship is None):
+            self._reset_inspector()
 
     # ── Public API ───────────────────────────────────────────
 
@@ -1042,8 +1211,8 @@ class _GraphNodeItem(QGraphicsRectItem):
         self._click_handlers = []
         self._is_critical = False
         self._is_selected = False
-        self.setBrush(QColor(BG))
-        self.setPen(QPen(QColor(BORDER), 1.5))
+        self.setBrush(QColor(SURFACE_LIGHT))
+        self._apply_pen()
         self.setFlag(QGraphicsRectItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setAcceptHoverEvents(True)
 
@@ -1061,17 +1230,24 @@ class _GraphNodeItem(QGraphicsRectItem):
         for handler in self._click_handlers:
             handler(self._activity_id)
 
+    def _apply_pen(self) -> None:
+        if self._is_selected:
+            self.setPen(QPen(QColor(ACCENT), 2.6))
+        elif self._is_critical:
+            self.setPen(QPen(QColor(WARNING), 2.2))
+        else:
+            self.setPen(QPen(QColor(BORDER), 1.2))
+
+    def set_selected(self, selected: bool) -> None:
+        self._is_selected = selected
+        self._apply_pen()
+        self.update()
+
     def set_metrics(self, duration: float, is_critical: bool,
                     is_selected: bool) -> None:
         self._is_critical = is_critical
         self._is_selected = is_selected
-        if self._is_selected:
-            pen = QPen(QColor(ACCENT), 2.5)
-        elif self._is_critical:
-            pen = QPen(QColor(WARNING), 2.0)
-        else:
-            pen = QPen(QColor(BORDER), 1.5)
-        self.setPen(pen)
+        self._apply_pen()
 
         self._id_item.setPlainText(self._activity_id)
         self._id_item.setDefaultTextColor(QColor(TEXT))
@@ -1079,7 +1255,14 @@ class _GraphNodeItem(QGraphicsRectItem):
         f.setBold(True)
         f.setPointSize(10)
         self._id_item.setFont(f)
-        self._id_item.setPos(self.rect().center().x() - 8, self.rect().top() + 4)
+        # Center computationally instead of hard-coded pixel offsets, so
+        # any node size (and the empty-state glyph) stays optically true.
+        cx = self.rect().center().x()
+        ibr = self._id_item.boundingRect()
+        self._id_item.setPos(
+            cx - ibr.width() / 2,
+            self.rect().top() + self.rect().height() * 0.12,
+        )
 
         self._dur_item.setPlainText(f"{duration:g} d")
         self._dur_item.setDefaultTextColor(
@@ -1088,19 +1271,22 @@ class _GraphNodeItem(QGraphicsRectItem):
         f2 = self._dur_item.font()
         f2.setPointSize(9)
         self._dur_item.setFont(f2)
-        self._dur_item.setPos(self.rect().center().x() - 12,
-                              self.rect().top() + self.rect().height() * 0.55)
+        dbr = self._dur_item.boundingRect()
+        self._dur_item.setPos(
+            cx - dbr.width() / 2,
+            self.rect().top() + self.rect().height() * 0.58,
+        )
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         self._emit_clicked()
         super().mousePressEvent(event)
 
     def hoverEnterEvent(self, event) -> None:  # noqa: N802
-        self.setBrush(QColor(SURFACE_LIGHT))
+        self.setBrush(QColor(ELEVATED))
         super().hoverEnterEvent(event)
 
     def hoverLeaveEvent(self, event) -> None:  # noqa: N802
-        self.setBrush(QColor(BG))
+        self.setBrush(QColor(SURFACE_LIGHT))
         super().hoverLeaveEvent(event)
 
 
@@ -1150,8 +1336,8 @@ class _GraphEdgeItem(QGraphicsRectItem):
 
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: N802
         del option, widget
-        color = ACCENT if self._is_selected else TEXT_SECONDARY
-        width = 2.2 if self._is_selected else 1.5
+        color = ACCENT if self._is_selected else TEXT
+        width = 2.5 if self._is_selected else 2.0
         pen = QPen(QColor(color), width)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)

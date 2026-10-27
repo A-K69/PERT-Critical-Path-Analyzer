@@ -189,6 +189,44 @@ def main() -> None:
                 pump(app, 320)
         _grab_page(results_page, name, window)
 
+    # ── Network Builder (11/12/13) ─────────────────────────────
+    # 11: the page exactly as a first-time visitor sees it (empty).
+    print("\nCapturing: 11_network_builder")
+    window._on_nav(NavDestination.NETWORK_BUILDER)
+    app.processEvents()
+    pump(app, 320)
+    pump(app, 320)
+    bpage = window._network_builder_page
+    _grab_page(bpage, "11_network_builder", window)
+
+    # 13: the live workspace populated with the classic 4-activity
+    # diamond (same shape the builder tests use) after CPM, so the
+    # review can judge the working state, not just the empty state.
+    print("Capturing: 13_network_builder_populated")
+    bmodel = bpage.get_model()
+    for aid, dur, preds in (
+        ("A", 1, ""), ("B", 2, "A"), ("C", 2, "A"), ("D", 3, "B, C"),
+    ):
+        bmodel.add_activity(aid, duration=dur, predecessors=preds)
+    bpage._reload_from_model()
+    bmodel.calculate_cpm()
+    app.processEvents()
+    pump(app, 320)
+    _grab_page(bpage, "13_network_builder_populated", window)
+
+    # 12: the real end-to-end flow — the page's own Analyze button is
+    # clicked and the results the user lands on are captured.
+    print("Capturing: 12_results_from_builder")
+    bpage._analyze_btn.click()
+    app.processEvents()
+    pump(app, 480)
+    # The results engine restores the last-viewed sub-tab; a fresh arrival
+    # should be photographed on Overview, exactly what the user sees first.
+    window._results_page._tabs.setCurrentIndex(0)
+    app.processEvents()
+    pump(app, 240)
+    _grab_page(window._results_page, "12_results_from_builder", window)
+
     print("\nDone. Screenshots in:", OUT_DIR)
     return 0
 

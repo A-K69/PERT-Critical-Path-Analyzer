@@ -16,6 +16,7 @@ from PySide6.QtGui import (
     QColor,
     QFont,
     QPainter,
+    QPainterPath,
     QPen,
     QPolygonF,
     QTextOption,
@@ -370,7 +371,12 @@ class NetworkBuilderPage(QWidget):
 
         self._rel_from = QComboBox()
         self._rel_from.addItem("\u2014")
-        self._rel_from.setMaximumWidth(80)
+        # Size to the longest activity id: the old 80px cap clipped wider
+        # ids both in the closed control and in the popup list.
+        self._rel_from.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToContents
+        )
+        self._rel_from.setMinimumWidth(84)
         self._rel_from.setFont(QFont(*STATUS_FONT))
         self._rel_from.setStyleSheet(
             f"QComboBox {{ background: {SURFACE_LIGHT}; color: {TEXT};"
@@ -386,7 +392,10 @@ class NetworkBuilderPage(QWidget):
 
         self._rel_to = QComboBox()
         self._rel_to.addItem("\u2014")
-        self._rel_to.setMaximumWidth(80)
+        self._rel_to.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToContents
+        )
+        self._rel_to.setMinimumWidth(84)
         self._rel_to.setFont(QFont(*STATUS_FONT))
         self._rel_to.setStyleSheet(
             f"QComboBox {{ background: {SURFACE_LIGHT}; color: {TEXT};"
@@ -1137,6 +1146,12 @@ class NetworkBuilderPage(QWidget):
             self._graph_scene.addItem(node)
         for src, tgt in (("A", "B"), ("A", "C"), ("B", "C")):
             start, end = network_layout.edge_points(positions, src, tgt)
+            if (src, tgt) == ("B", "C"):
+                # Stagger this edge into C's top edge: sharing C's left
+                # anchor with the A->C elbow collided the two arrowheads
+                # in one point (decorative glyph only).
+                gx, gy, gw, _ = positions["C"]
+                end = (gx + gw / 2, gy)
             edge = _GraphEdgeItem(src, tgt, start, end)
             edge.setFlag(
                 QGraphicsRectItem.GraphicsItemFlag.ItemIsSelectable, False
@@ -1408,14 +1423,16 @@ class _GraphEdgeItem(QGraphicsRectItem):
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: N802
         del option, widget
         color = ACCENT if self._is_selected else TEXT
-        width = 2.5 if self._is_selected else 2.0
-        pen = QPen(QColor(color), width)
+        pen = QPen(QColor(color), 2.5 if self._is_selected else 2.0)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
-        painter.drawLine(self._start, self._end)
 
-        angle = math.atan2(self._end.y() - self._start.y(),
-                           self._end.x() - self._start.x())
+        path, angle = self._route()
+        if path is None:
+            painter.drawLine(self._start, self._end)
+        else:
+            painter.drawPath(path)
+
         head = 11.0
         ax1 = self._end.x() - head * math.cos(angle - 0.42)
         ay1 = self._end.y() - head * math.sin(angle - 0.42)
@@ -1428,6 +1445,32 @@ class _GraphEdgeItem(QGraphicsRectItem):
             QPointF(ax1, ay1),
             QPointF(ax2, ay2),
         ]))
+
+    def _route(self) -> Optional[tuple]:
+        """Connector route: straight line when the two rows align or the
+        edge runs backwards (only the decorative empty-canvas glyph does);
+        otherwise a rounded right-angle elbow out of the source's right
+        side, a vertical turn inside the inter-column gap, then into the
+        target's left side. Straight diagonals used to slice close past
+        the neighbouring nodes (C->D / B->D in small networks). Returns
+        ``(path, final_angle)``; the path is None for straight lines.
+        """
+        start, end = self._start, self._end
+        if end.x() <= start.x() or abs(end.y() - start.y()) < 2.0:
+            return None, math.atan2(end.y() - start.y(),
+                                    end.x() - start.x())
+        down = 1.0 if end.y() > start.y() else -1.0
+        r = min(9.0, abs(end.y() - start.y()) / 2)
+        gap = end.x() - start.x()
+        mid_x = start.x() + max(12.0, min(36.0, gap / 2))
+        path = QPainterPath(start)
+        path.lineTo(mid_x - r, start.y())
+        path.quadTo(mid_x, start.y(), mid_x, start.y() + down * r)
+        path.lineTo(mid_x, end.y() - down * r)
+        path.quadTo(mid_x, end.y(), mid_x + r, end.y())
+        path.lineTo(end)
+        # The final run enters the target horizontally from the left.
+        return path, 0.0
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         self._emit_clicked()

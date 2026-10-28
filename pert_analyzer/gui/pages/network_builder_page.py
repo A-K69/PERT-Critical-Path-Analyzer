@@ -1095,9 +1095,28 @@ class NetworkBuilderPage(QWidget):
             self._graph_nodes[aid] = node
 
         self._graph_edges = []
+        # Feedback relationships (cycles the user is still drawing) leave
+        # the source's bottom edge and return through a horizontal channel
+        # below the whole diagram, so they never slice across the columns.
+        max_bottom = max((y + h for _, y, _, h in positions.values()),
+                         default=0.0)
+        channel_base = max_bottom + 28.0
+        channel_used = 0
         for r in rels:
+            sx, sy, sw, sh = positions[r.source]
+            tx, ty, tw, th = positions[r.target]
             start, end = network_layout.edge_points(positions, r.source, r.target)
-            edge = _GraphEdgeItem(r.source, r.target, start, end)
+            loop_channel = None
+            if tx < sx - 1.0:
+                start = (sx + sw / 2, sy + sh)
+                end = (tx + tw / 2, ty + th)
+                # One nesting step per feedback edge keeps shared channels
+                # from collapsing onto each other.
+                loop_channel = channel_base + channel_used * 18.0
+                channel_used += 1
+            edge = _GraphEdgeItem(
+                r.source, r.target, start, end, loop_channel
+            )
             edge.set_selected(
                 self._model.selected_relationship == (r.source, r.target)
             )
@@ -1383,7 +1402,8 @@ class _GraphEdgeItem(QGraphicsRectItem):
     arrowhead, with a fat invisible hit-rect for easier selection.
     """
 
-    def __init__(self, source: str, target: str, start, end) -> None:
+    def __init__(self, source: str, target: str, start, end,
+                 channel: float | None = None) -> None:
         super().__init__()
         self._source = source
         self._target = target
@@ -1391,18 +1411,22 @@ class _GraphEdgeItem(QGraphicsRectItem):
         self._start = QPointF(start[0], start[1])
         self._end = QPointF(end[0], end[1])
         self._is_selected = False
+        # Feedback (cycle) edges route through a horizontal return channel
+        # below the diagram; None means a normal forward/straight edge.
+        self._channel = channel
 
-        dx = self._end.x() - self._start.x()
-        dy = self._end.y() - self._start.y()
-        length = max(1.0, (dx * dx + dy * dy) ** 0.5)
-        dir_x, dir_y = dx / length, dy / length
-        del dir_x, dir_y
         perp = 6.0
+        left = min(self._start.x(), self._end.x())
+        right = max(self._start.x(), self._end.x())
+        top = min(self._start.y(), self._end.y())
+        bottom = channel if channel is not None else max(
+            self._start.y(), self._end.y()
+        )
         self.setRect(
-            min(self._start.x(), self._end.x()) - perp,
-            min(self._start.y(), self._end.y()) - perp,
-            abs(dx) + 2 * perp,
-            abs(dy) + 2 * perp,
+            left - perp,
+            top - perp,
+            (right - left) + 2 * perp,
+            (bottom - top) + 2 * perp,
         )
         self.setPen(QPen(QColor(0, 0, 0, 0)))
         self.setBrush(QColor(0, 0, 0, 0))
@@ -1447,26 +1471,50 @@ class _GraphEdgeItem(QGraphicsRectItem):
         ]))
 
     def _route(self) -> Optional[tuple]:
-        """Connector route: straight line when the two rows align or the
-        edge runs backwards (only the decorative empty-canvas glyph does);
-        otherwise a rounded right-angle elbow out of the source's right
-        side, a vertical turn inside the inter-column gap, then into the
-        target's left side. Straight diagonals used to slice close past
-        the neighbouring nodes (C->D / B->D in small networks). Returns
-        ``(path, final_angle)``; the path is None for straight lines.
+        """Connector route, in priority order:
+
+        1. Feedback edge with a return channel (cycle relationships):
+           leaves the source's bottom edge, drops into the horizontal
+           channel below the diagram, runs across, rises again and enters
+           the target's bottom edge with an upward arrowhead. A straight
+           return line used to slice through every node on its way.
+        2. Forward elbow: straight line when the two rows align; else a
+           rounded right-angle elbow out of the source's right side, a
+           vertical turn inside the inter-column gap, then into the
+           target's left side (straight diagonals used to slice close
+           past the neighbouring nodes, C->D / B->D).
+        3. Backwards without a channel (decorative glyph only): plain
+           straight line.
+
+        Returns ``(path, final_angle)``; the path is None for straight
+        lines.
         """
         start, end = self._start, self._end
+        if self._channel is not None:
+            down = 9.0
+            turn_in = 1.0 if end.x() > start.x() else (
+                -1.0 if end.x() < start.x() else 1.0
+            )
+            ch = self._channel
+            path = QPainterPath(start)
+            path.lineTo(start.x(), ch - down)
+            path.quadTo(QPointF(start.x(), ch),
+                        QPointF(start.x() + turn_in * down, ch))
+            path.lineTo(end.x() - turn_in * down, ch)
+            path.quadTo(QPointF(end.x(), ch), QPointF(end.x(), ch - down))
+            path.lineTo(end)
+            return path, -math.pi / 2
         if end.x() <= start.x() or abs(end.y() - start.y()) < 2.0:
             return None, math.atan2(end.y() - start.y(),
                                     end.x() - start.x())
-        down = 1.0 if end.y() > start.y() else -1.0
         r = min(9.0, abs(end.y() - start.y()) / 2)
         gap = end.x() - start.x()
         mid_x = start.x() + max(12.0, min(36.0, gap / 2))
         path = QPainterPath(start)
+        down_s = 1.0 if end.y() > start.y() else -1.0
         path.lineTo(mid_x - r, start.y())
-        path.quadTo(mid_x, start.y(), mid_x, start.y() + down * r)
-        path.lineTo(mid_x, end.y() - down * r)
+        path.quadTo(mid_x, start.y(), mid_x, start.y() + down_s * r)
+        path.lineTo(mid_x, end.y() - down_s * r)
         path.quadTo(mid_x, end.y(), mid_x + r, end.y())
         path.lineTo(end)
         # The final run enters the target horizontally from the left.

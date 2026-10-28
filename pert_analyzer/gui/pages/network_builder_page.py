@@ -415,6 +415,18 @@ class NetworkBuilderPage(QWidget):
         self._rel_list_label.setWordWrap(True)
         rel_layout.addWidget(self._rel_list_label)
 
+        # Interactive chips row: one chip per relationship, each with its
+        # own remove action (the plain-text row above stays as the empty
+        # hint and a fallback).
+        self._rel_chips_area = QWidget()
+        self._rel_chips_area.setStyleSheet("background: transparent;")
+        self._rel_chips_layout = QHBoxLayout(self._rel_chips_area)
+        self._rel_chips_layout.setContentsMargins(0, 2, 0, 0)
+        self._rel_chips_layout.setSpacing(6)
+        self._rel_chips_layout.addStretch()
+        self._rel_chips_area.hide()
+        rel_layout.addWidget(self._rel_chips_area)
+
         layout.addWidget(rel_frame)
 
         # Status bar
@@ -446,6 +458,12 @@ class NetworkBuilderPage(QWidget):
         self._deps_count_label.setFont(QFont(*MUTED_FONT))
         self._deps_count_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         sb_layout.addWidget(self._deps_count_label)
+
+        # The header already shows both counts; these stay updated for
+        # programmatic access but out of the row, so the same two numbers
+        # don't appear twice in one line.
+        self._acts_count_label.hide()
+        self._deps_count_label.hide()
 
         layout.addWidget(status_bar)
 
@@ -861,11 +879,61 @@ class NetworkBuilderPage(QWidget):
 
     def _update_relationships_display(self) -> None:
         rels = self._model.get_all_relationships()
+        # Clear the chips row (the trailing stretch stays in place).
+        while self._rel_chips_layout.count() > 1:
+            item = self._rel_chips_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
         if not rels:
             self._rel_list_label.setText("No relationships defined.")
+            self._rel_list_label.show()
+            self._rel_chips_area.hide()
         else:
-            texts = [f"{r.source} \u2192 {r.target}" for r in rels]
-            self._rel_list_label.setText("   ".join(texts))
+            for index, rel in enumerate(rels):
+                self._rel_chips_layout.insertWidget(index, self._make_relationship_chip(rel))
+            self._rel_list_label.hide()
+            self._rel_chips_area.show()
+
+    def _make_relationship_chip(self, rel) -> QWidget:
+        """One removable "A → B ✕" chip for the relationships bar."""
+        frame = QFrame()
+        frame.setFrameShape(QFrame.Shape.NoFrame)
+        frame.setStyleSheet(
+            f"QFrame {{ background: {ELEVATED}; border: 1px solid {BORDER};"
+            f" border-radius: 10px; }}"
+            f"QFrame:hover {{ border: 1px solid {ACCENT}; }}"
+        )
+        chip_layout = QHBoxLayout(frame)
+        chip_layout.setContentsMargins(10, 2, 4, 2)
+        chip_layout.setSpacing(4)
+
+        text = QLabel(f"{rel.source} \u2192 {rel.target}")
+        text.setFont(QFont(*STATUS_FONT))
+        text.setStyleSheet(
+            f"color: {TEXT}; background: transparent; border: none;"
+        )
+        chip_layout.addWidget(text)
+
+        remove_btn = QPushButton("\u2715")
+        remove_btn.setFixedSize(18, 18)
+        remove_btn.setFont(QFont(*MUTED_FONT))
+        # padding/min-height: 0 counters the global button box model, which
+        # would otherwise clip the glyph inside this tiny control.
+        remove_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {TEXT_MUTED};"
+            f" border: none; border-radius: 9px; padding: 0px;"
+            f" min-height: 0px; }}"
+            f"QPushButton:hover {{ background: {DANGER}33; color: {DANGER}; }}"
+        )
+        remove_btn.clicked.connect(
+            lambda checked=False, s=rel.source, t=rel.target:
+                self._on_delete_relationship(s, t)
+        )
+        chip_layout.addWidget(remove_btn)
+
+        return frame
 
     def _update_inspector_activity(self, activity_id: str) -> None:
         entry = self._model.get_activity(activity_id)

@@ -65,6 +65,21 @@ from pert_analyzer.gui.themes.typography import (
 logger = logging.getLogger(__name__)
 
 
+def _rgba(hex_color: str, alpha: int) -> str:
+    """QSS-valid rgba() tint from a #RRGGBB color.
+
+    Qt stylesheets reject 8-digit #RRGGBBAA hex, so the shorthand
+    ``{COLOR}22`` pattern silently falls back to the default control
+    background (which rendered the delete button yellow). Other result
+    pages already use this helper; keep the same convention here.
+    """
+    h = hex_color.lstrip("#")
+    return (
+        f"rgba({int(h[0:2], 16)}, {int(h[2:4], 16)}, "
+        f"{int(h[4:6], 16)}, {alpha})"
+    )
+
+
 class NetworkBuilderPage(QWidget):
     """
     Full manual network builder workspace.
@@ -588,7 +603,15 @@ class NetworkBuilderPage(QWidget):
         id_input = QLineEdit(activity_id)
         id_input.setFixedWidth(88)
         id_input.setFont(QFont(*STATUS_FONT))
-        id_input.setToolTip("Activity ID - click to edit; must be unique.")
+        id_input.setToolTip(
+            "Activity ID - click to edit; must be unique. "
+            "Letters are uppercased automatically."
+        )
+        # Small letters become capitals as they are typed: 'f', 'f1' read
+        # as 'F', 'F1', so ids stay case-consistent with the sequence.
+        id_input.textEdited.connect(
+            lambda _txt, inp=id_input: self._force_upper(inp)
+        )
         id_input.setStyleSheet(
             f"QLineEdit {{ background: transparent; color: {ACCENT};"
             f" font-weight: 600; border: none;"
@@ -658,16 +681,30 @@ class NetworkBuilderPage(QWidget):
         # Insert before the stretch
         self._activity_layout.insertWidget(self._activity_layout.count() - 1, row)
 
+    @staticmethod
+    def _force_upper(inp: Any) -> None:
+        """Uppercase a text field in place, preserving the caret.
+
+        Pure case mapping keeps the string length, so the caret offset
+        stays at the character the user was typing.
+        """
+        cur = inp.cursorPosition()
+        up = inp.text().upper()
+        if up != inp.text():
+            inp.setText(up)
+            inp.setCursorPosition(min(cur, len(up)))
+
     def _on_activity_id_changed(self, row: Any, inp: Any) -> None:
         """Commit an edited activity ID, validated by the model.
 
         The id is auto-sequenced when the row is created, but the user can
         override it; empty or duplicate ids revert to the previous value
-        with a warning. On success the row (and the selection) rebind to
-        the new id, so subsequent duration/predecessor/delete edits keep
-        targeting this activity.
+        with a warning. Typed text is normalized to uppercase ('f' reads
+        as 'F') so ids stay case-consistent. On success the row (and the
+        selection) rebind to the new id, so subsequent duration/
+        predecessor/delete edits keep targeting this activity.
         """
-        new_id = inp.text().strip()
+        new_id = inp.text().strip().upper()
         old_id = getattr(row, "_activity_id", None)
         if old_id is None:
             inp.clear()
@@ -1057,11 +1094,14 @@ class NetworkBuilderPage(QWidget):
         delete_btn = QPushButton("Delete activity")
         delete_btn.setFont(QFont(*STATUS_FONT))
         delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Twins the 'Delete relationship' button below, and uses QSS-valid
+        # rgba() tints - the old {DANGER}22 8-digit hex is ignored by Qt,
+        # which let the amber default button background bleed through.
         delete_btn.setStyleSheet(
-            f"QPushButton {{ background: {DANGER}22; color: {DANGER};"
-            f" border: 1px solid {DANGER}66; border-radius: 6px;"
+            f"QPushButton {{ background: transparent; color: {DANGER};"
+            f" border: 1px solid {_rgba(DANGER, 102)}; border-radius: 6px;"
             f" padding: 5px 10px; font-weight: 600; }}"
-            f"QPushButton:hover {{ background: {DANGER}44;"
+            f"QPushButton:hover {{ background: {_rgba(DANGER, 34)};"
             f" border: 1px solid {DANGER}; }}"
         )
         delete_btn.clicked.connect(
@@ -1075,11 +1115,13 @@ class NetworkBuilderPage(QWidget):
         delete_btn = QPushButton("Delete relationship")
         delete_btn.setFont(QFont(*STATUS_FONT))
         delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Same rgba() tints as the activity twin: the 8-digit {DANGER}66
+        # / {DANGER}22 hex here was also silently ignored by Qt.
         delete_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {DANGER};"
-            f" border: 1px solid {DANGER}66; border-radius: 6px;"
+            f" border: 1px solid {_rgba(DANGER, 102)}; border-radius: 6px;"
             f" padding: 5px 10px; font-weight: 600; }}"
-            f"QPushButton:hover {{ background: {DANGER}22;"
+            f"QPushButton:hover {{ background: {_rgba(DANGER, 34)};"
             f" border: 1px solid {DANGER}; }}"
         )
         delete_btn.clicked.connect(

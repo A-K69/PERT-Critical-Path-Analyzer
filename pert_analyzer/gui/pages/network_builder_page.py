@@ -17,6 +17,7 @@ from PySide6.QtGui import (
     QFont,
     QPainter,
     QPainterPath,
+    QPainterPathStroker,
     QPen,
     QPolygonF,
     QTextOption,
@@ -581,12 +582,22 @@ class NetworkBuilderPage(QWidget):
         row_layout.setContentsMargins(8, 4, 8, 4)
         row_layout.setSpacing(6)
 
-        # Activity ID (read-only label)
-        id_label = QLabel(activity_id)
-        id_label.setFont(QFont(*STATUS_FONT))
-        id_label.setStyleSheet(f"color: {ACCENT}; font-weight: 600;")
-        id_label.setFixedWidth(30)
-        row_layout.addWidget(id_label)
+        # Activity ID - auto-sequenced by the model on add, but editable:
+        # renaming goes through the model's validation (unique, non-empty)
+        # and the row rebinds its handlers to the new id at call time.
+        id_input = QLineEdit(activity_id)
+        id_input.setFixedWidth(88)
+        id_input.setFont(QFont(*STATUS_FONT))
+        id_input.setToolTip("Activity ID - click to edit; must be unique.")
+        id_input.setStyleSheet(
+            f"QLineEdit {{ background: transparent; color: {ACCENT};"
+            f" font-weight: 600; border: none;"
+            f" border-bottom: 1px dashed transparent; }}"
+            f"QLineEdit:hover {{ border-bottom: 1px dashed {ACCENT}55; }}"
+            f"QLineEdit:focus {{ background: {SURFACE};"
+            f" border: 1px solid {ACCENT}; border-radius: 4px; }}"
+        )
+        row_layout.addWidget(id_input)
 
         # Duration
         dur_input = QLineEdit(str(int(entry.duration)) if entry.duration == int(entry.duration) else str(entry.duration))
@@ -620,24 +631,62 @@ class NetworkBuilderPage(QWidget):
             f" border: none; border-radius: 4px; }}"
             f"QPushButton:hover {{ background: {DANGER}33; color: {DANGER}; }}"
         )
-        del_btn.clicked.connect(lambda checked, aid=activity_id: self._on_delete_activity(aid))
+        del_btn.clicked.connect(
+            lambda checked=False, _row=row: self._on_delete_activity(_row._activity_id)
+        )
         row_layout.addWidget(del_btn)
 
         # Store input refs on the row widget for later access
         row._dur_input = dur_input
         row._pred_input = pred_input
+        row._id_input = id_input
         row._activity_id = activity_id
 
-        # Connect editing finished signals
+        # Connect editing finished signals - the id is resolved through the
+        # row at call time, so a rename carries the later edits with it
+        # instead of writing to the stale captured id.
+        id_input.editingFinished.connect(
+            lambda _row=row, inp=id_input: self._on_activity_id_changed(_row, inp)
+        )
         dur_input.editingFinished.connect(
-            lambda aid=activity_id, inp=dur_input: self._on_duration_changed(aid, inp)
+            lambda _row=row, inp=dur_input: self._on_duration_changed(_row._activity_id, inp)
         )
         pred_input.editingFinished.connect(
-            lambda aid=activity_id, inp=pred_input: self._on_predecessors_changed(aid, inp)
+            lambda _row=row, inp=pred_input: self._on_predecessors_changed(_row._activity_id, inp)
         )
 
         # Insert before the stretch
         self._activity_layout.insertWidget(self._activity_layout.count() - 1, row)
+
+    def _on_activity_id_changed(self, row: Any, inp: Any) -> None:
+        """Commit an edited activity ID, validated by the model.
+
+        The id is auto-sequenced when the row is created, but the user can
+        override it; empty or duplicate ids revert to the previous value
+        with a warning. On success the row (and the selection) rebind to
+        the new id, so subsequent duration/predecessor/delete edits keep
+        targeting this activity.
+        """
+        new_id = inp.text().strip()
+        old_id = getattr(row, "_activity_id", None)
+        if old_id is None:
+            inp.clear()
+            return
+        if new_id == old_id:
+            inp.setText(old_id)
+            return
+        err = self._model.rename_activity(old_id, new_id)
+        if err:
+            QMessageBox.warning(self, "Rename Activity", err)
+            inp.setText(old_id)
+            return
+        # rename_activity emits structural change but does not carry the
+        # selection over - keep the inspector on this (renamed) node.
+        if self._model.selected_activity == old_id:
+            self._model.select_activity(new_id)
+        row._activity_id = new_id
+        row.setObjectName(f"activity_row_{new_id}")
+        inp.setText(new_id)
 
     def _on_duration_changed(self, activity_id: str, inp: Any) -> None:
         try:
@@ -1000,6 +1049,26 @@ class NetworkBuilderPage(QWidget):
 
         self._inspector_content.setText("".join(lines))
         self._inspector_content.setTextFormat(Qt.TextFormat.RichText)
+        self._add_inspector_delete_activity(activity_id)
+
+    def _add_inspector_delete_activity(self, activity_id: str) -> None:
+        """Offer a direct way to remove the inspected activity (and its
+        arrows) from the node inspector - the edge path already had one."""
+        delete_btn = QPushButton("Delete activity")
+        delete_btn.setFont(QFont(*STATUS_FONT))
+        delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        delete_btn.setStyleSheet(
+            f"QPushButton {{ background: {DANGER}22; color: {DANGER};"
+            f" border: 1px solid {DANGER}66; border-radius: 6px;"
+            f" padding: 5px 10px; font-weight: 600; }}"
+            f"QPushButton:hover {{ background: {DANGER}44;"
+            f" border: 1px solid {DANGER}; }}"
+        )
+        delete_btn.clicked.connect(
+            lambda checked=False, a=activity_id: self._on_delete_activity(a)
+        )
+        self._inspector_action_layout.addWidget(delete_btn)
+        self._inspector_action_layout.addStretch()
 
     def _add_inspector_delete_relationship(self, src: str, tgt: str) -> None:
         """Offer a direct way to remove the relationship being inspected."""
@@ -1149,8 +1218,8 @@ class NetworkBuilderPage(QWidget):
         quiet until the first click."""
         positions = {
             "A": (150, 26, 64, 34),
-            "B": (356, 26, 64, 34),
-            "C": (253, 106, 64, 34),
+            "B": (330, 26, 64, 34),
+            "C": (330, 106, 64, 34),
         }
         durations = {"A": 1, "B": 2, "C": 2}
         for aid, (x, y, w, h) in positions.items():
@@ -1163,21 +1232,27 @@ class NetworkBuilderPage(QWidget):
                 duration=durations[aid], is_critical=False, is_selected=False
             )
             self._graph_scene.addItem(node)
-        for src, tgt in (("A", "B"), ("A", "C"), ("B", "C")):
+        for src, tgt in (("A", "B"), ("A", "C")):
             start, end = network_layout.edge_points(positions, src, tgt)
-            if (src, tgt) == ("B", "C"):
-                # Stagger this edge into C's top edge: sharing C's left
-                # anchor with the A->C elbow collided the two arrowheads
-                # in one point (decorative glyph only).
-                gx, gy, gw, _ = positions["C"]
-                end = (gx + gw / 2, gy)
             edge = _GraphEdgeItem(src, tgt, start, end)
             edge.setFlag(
                 QGraphicsRectItem.GraphicsItemFlag.ItemIsSelectable, False
             )
             self._graph_scene.addItem(edge)
+        # B->C: C sits directly under B, so this is a clean vertical arrow
+        # into C's top edge - the old slanted return into C's side read as
+        # a mis-aimed arrow.
+        bx, by, bw, bh = positions["B"]
+        cxx, cy = positions["C"][0] + positions["C"][2] / 2, positions["C"][1]
+        edge = _GraphEdgeItem(
+            "B", "C", (bx + bw / 2, by + bh), (cxx, cy)
+        )
+        edge.setFlag(
+            QGraphicsRectItem.GraphicsItemFlag.ItemIsSelectable, False
+        )
+        self._graph_scene.addItem(edge)
 
-        cx = 285  # glyph horizontal center (150..420)
+        cx = 272  # glyph horizontal center (150..394)
         title = QGraphicsTextItem("Your network takes shape here")
         title.setDefaultTextColor(QColor(TEXT))
         f = title.font()
@@ -1431,6 +1506,25 @@ class _GraphEdgeItem(QGraphicsRectItem):
         self.setPen(QPen(QColor(0, 0, 0, 0)))
         self.setBrush(QColor(0, 0, 0, 0))
         self.setFlag(QGraphicsRectItem.GraphicsItemFlag.ItemIsSelectable, True)
+        # Nodes win any overlap; edges sit under them in the scene stack.
+        self.setZValue(-1)
+        # Clickable area hugs the drawn line: the plain rect() used to be
+        # a huge transparent band - the last-added edge's rect ate clicks
+        # aimed at older edges, so only the newest relationship looked
+        # deletable.
+        stroker = QPainterPathStroker()
+        stroker.setWidth(12)
+        stroker.setCapStyle(Qt.PenCapStyle.RoundCap)
+        stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        self._hit_shape = stroker.createStroke(self._route()[0] or self._straight_base())
+
+    def _straight_base(self) -> QPainterPath:
+        base = QPainterPath(self._start)
+        base.lineTo(self._end)
+        return base
+
+    def shape(self) -> QPainterPath:  # noqa: N802
+        return self._hit_shape
 
     # QGraphicsItem is not a QObject, so expose a signal-like API.
     def connect(self, handler) -> None:

@@ -1174,8 +1174,11 @@ class NetworkBuilderPage(QWidget):
 
     def fit_graph(self) -> None:
         try:
+            # Fit against the view's own scene rect (which includes the
+            # padding margins) — fitting the raw bounding rect instead left
+            # a ~4% overspill that forced a phantom horizontal scrollbar.
             self._graph_view.fitInView(
-                self._graph_scene.itemsBoundingRect(),
+                self._graph_view.sceneRect(),
                 Qt.AspectRatioMode.KeepAspectRatio,
             )
         except Exception:  # noqa: BLE001 (empty/invalid rect is fine)

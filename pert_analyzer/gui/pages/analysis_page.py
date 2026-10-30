@@ -10,11 +10,12 @@ import tempfile
 import uuid
 from typing import Any, Optional
 
-from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
     QKeySequence,
+    QLinearGradient,
     QPainter,
     QPen,
     QPixmap,
@@ -99,6 +100,17 @@ _MAX_ZOOM = 8.0
 _ZOOM_STEP = 1.25
 
 
+def _accent_color(alpha: int) -> QColor:
+    """ACCENT with an explicit alpha.
+
+    Deliberately avoids the two-argument QColor(name, alpha)
+    constructor: build from the plain hex name, then setAlpha.
+    """
+    color = QColor(ACCENT)
+    color.setAlpha(int(alpha))
+    return color
+
+
 class ImageView(QLabel):
     """
     Image preview with fit / zoom / pan / reset and drag-and-drop support.
@@ -121,11 +133,40 @@ class ImageView(QLabel):
         self._press_pos: Optional[QPoint] = None
         self._pan_origin = QPoint(0, 0)
         self._drag_hover = False
+        # Live scanning sweep while the pipeline runs on this diagram.
+        self._scanning = False
+        self._scan_t = 0.0
+        self._scan_timer = QTimer(self)
+        self._scan_timer.setInterval(33)
+        self._scan_timer.timeout.connect(self._advance_scan)
         self.setMinimumHeight(240)
         self.setAcceptDrops(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
         self._set_placeholder()
+
+    def set_scanning(self, on: bool) -> None:
+        """Animate (or stop) the scanning sweep over the loaded image."""
+        on = bool(on)
+        if on == self._scanning:
+            return
+        self._scanning = on
+        if on:
+            self._scan_t = 0.0
+            self._scan_timer.start()
+        else:
+            self._scan_timer.stop()
+        self.update()
+
+    def is_scanning(self) -> bool:
+        return self._scanning
+
+    def _advance_scan(self) -> None:
+        # 33ms per tick across a ~2s full sweep (ping-pong feels alive).
+        self._scan_t += 1.0 / 60.0
+        if self._scan_t >= 2.0:
+            self._scan_t -= 2.0
+        self.update()
 
     # ------------------------------------------------------------------
     # Public API
@@ -360,12 +401,77 @@ class ImageView(QLabel):
         y = (edge.height() - target_h) / 2 + self._pan.y()
         painter.drawPixmap(int(round(x)), int(round(y)), scaled)
 
+        if self._scanning:
+            self._paint_scan_overlay(
+                painter, x, y, target_w, target_h, edge
+            )
+
         if self._drag_hover:
             pen = QPen(QColor(ACCENT), 2)
             painter.setPen(pen)
             painter.drawRoundedRect(edge, RADIUS_LG, RADIUS_LG)
 
         painter.end()
+
+    def _paint_scan_overlay(
+        self,
+        painter: QPainter,
+        img_x: float,
+        img_y: float,
+        img_w: float,
+        img_h: float,
+        frame: "QRect",
+    ) -> None:
+        """Machine-eye sweep: corner brackets + a glowing beam riding
+        the image while the pipeline reads it."""
+        painter.save()
+        # Soft veil so the beam pops against the diagram.
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(6, 12, 22, 54))
+        painter.drawRect(frame)
+
+        band = max(12, int(img_h / 90))
+        # 0..1..0 ping-pong so the eye travels down and returns.
+        y_frac = min(1.0, max(0.0, 1.0 - abs(1.0 - self._scan_t)))
+        y_center = img_y + y_frac * img_h
+        top = y_center - band
+        grad = QLinearGradient(
+            0, float(top), 0, float(top + band * 2)
+        )
+        grad.setColorAt(0.0, _accent_color(0))
+        grad.setColorAt(0.5, _accent_color(70))
+        grad.setColorAt(1.0, _accent_color(0))
+        painter.setBrush(grad)
+        x0 = max(frame.left(), int(img_x))
+        x1 = min(frame.right(), int(img_x + img_w))
+        if x1 > x0 and top + band > frame.top() and top - band < frame.bottom():
+            painter.drawRect(x0, int(max(frame.top(), top)), x1 - x0, band * 2)
+            # Core line of the beam.
+            pen = QPen(_accent_color(210), 2)
+            painter.setPen(pen)
+            line_y = min(max(float(y_center), frame.top() + 1),
+                         frame.bottom() - 1)
+            painter.drawLine(
+                x0, int(line_y), x1, int(line_y)
+            )
+
+        # Corner brackets framing the area being read.
+        margin = 18
+        length = 26
+        pen = QPen(_accent_color(200), 2)
+        painter.setPen(pen)
+        bx0, by0 = int(img_x + margin), int(img_y + margin)
+        bx1, by1 = int(img_x + img_w - margin), int(img_y + img_h - margin)
+        if bx1 > bx0 and by1 > by0:
+            painter.drawLine(bx0, by0 + length, bx0, by0)
+            painter.drawLine(bx0, by0, bx0 + length, by0)
+            painter.drawLine(bx1 - length, by1, bx1, by1)
+            painter.drawLine(bx1, by1, bx1, by1 - length)
+            painter.drawLine(bx1, by0, bx1, by0 + length)
+            painter.drawLine(bx1 - length, by0, bx1, by0)
+            painter.drawLine(bx0 + length, by1, bx0, by1)
+            painter.drawLine(bx0, by1 - length, bx0, by1)
+        painter.restore()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -699,6 +805,8 @@ class AnalysisPage(QWidget):
         """Reset and reveal the live progress panel for a new run."""
         self._progress_model.reset()
         self._progress_panel.setVisible(True)
+        # Machine eye: sweep the diagram while the pipeline reads it.
+        self._image_view.set_scanning(True)
         self._status_panel.set_status("Analyzing... processing diagram", "accent")
 
     def on_progress(self, stage_progress: Any) -> None:
@@ -717,17 +825,20 @@ class AnalysisPage(QWidget):
             self._progress_model.collect_metrics()
         ):
             self._progress_model.note_metric("review_items", review_item_total)
+        self._image_view.set_scanning(False)
         self._status_panel.set_status("Analysis completed", "success")
 
     def show_failed(self, message: str) -> None:
         """Finalize the model after a failed analysis run."""
         self._progress_model.finish(ok=False, message=message)
+        self._image_view.set_scanning(False)
         self._status_panel.set_status(f"Analysis failed: {message}", "danger")
 
     def reset_analysis_progress(self) -> None:
         """Reset and hide the progress panel (image changed/removed)."""
         self._progress_model.reset()
         self._progress_panel.setVisible(False)
+        self._image_view.set_scanning(False)
 
     def progress_panel(self) -> Optional[StageProgressPanel]:
         return self._progress_panel

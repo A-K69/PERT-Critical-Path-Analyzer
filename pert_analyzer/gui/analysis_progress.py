@@ -11,11 +11,19 @@ review items) only when the pipeline reports them.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QPolygonF,
+    QLinearGradient,
+    QPainter,
+    QPen,
+)
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -81,6 +89,7 @@ class AnalysisProgressModel(QObject):
         self._by_id: Dict[str, StageEntry] = {e.stage_id: e for e in self._entries}
         self._overall = 0.0
         self._finished = False
+        self._outcome = ""
 
     # ------------------------------------------------------------------
     # Read access
@@ -97,6 +106,11 @@ class AnalysisProgressModel(QObject):
     @property
     def is_finished(self) -> bool:
         return self._finished
+
+    @property
+    def outcome(self) -> str:
+        """\"COMPLETED\" | \"FAILED\" | \"\" (not finished yet)."""
+        return self._outcome
 
     def stage_entry(self, stage_id: str) -> Optional[StageEntry]:
         return self._by_id.get(stage_id)
@@ -128,6 +142,7 @@ class AnalysisProgressModel(QObject):
             entry.metrics = {}
         self._overall = 0.0
         self._finished = False
+        self._outcome = ""
         self.updated.emit(self)
 
     def handle_stage(self, stage_progress: Any) -> None:
@@ -182,6 +197,7 @@ class AnalysisProgressModel(QObject):
         self._finished = True
         running = [e for e in self._entries if e.state == RUNNING]
         if ok:
+            self._outcome = "COMPLETED"
             for entry in self._entries:
                 if entry.state in (PENDING, RUNNING):
                     entry.state = COMPLETED
@@ -190,6 +206,7 @@ class AnalysisProgressModel(QObject):
             self._overall = 1.0
             self.finished.emit("COMPLETED")
         else:
+            self._outcome = "FAILED"
             failed = running[-1] if running else None
             reached_failed = failed is None
             for entry in self._entries:
@@ -202,6 +219,15 @@ class AnalysisProgressModel(QObject):
                     entry.state = SKIPPED if reached_failed else entry.state
             self.finished.emit("FAILED")
         self.updated.emit(self)
+
+
+def _rgba(hex_color: str, alpha: int) -> str:
+    """QSS-valid rgba() tint from a #RRGGBB color (Qt rejects #AARRGGBB)."""
+    h = hex_color.lstrip("#")
+    return (
+        f"rgba({int(h[0:2], 16)}, {int(h[2:4], 16)}, "
+        f"{int(h[4:6], 16)}, {alpha})"
+    )
 
 
 def format_metric(key: str, value: Any) -> str:
@@ -235,13 +261,167 @@ _STATE_COLORS = {
     SKIPPED: TEXT_MUTED,
 }
 
+# Quarter-circle wheel glyphs in order; the running stage chip cycles
+# through them so the waiting user can see the current stage turn.
+_SPINNER_FRAMES = ("\u25D0", "\u25D3", "\u25D1", "\u25D2")
+
+
+class _SheenProgressBar(QProgressBar):
+    """Slim progress bar with a travelling highlight.
+
+    The plain blue chunk looks dead while a stage runs for several
+    seconds without emitting events; the sheen keeps the bar visibly
+    alive without inventing progress values.
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._sheen_t = 0.0
+        self._sheen_active = False
+
+    def set_sheen_active(self, active: bool) -> None:
+        self._sheen_active = bool(active)
+        self.update()
+
+    def sheen_tick(self, dt: float) -> None:
+        if not self._sheen_active:
+            return
+        self._sheen_t = (self._sheen_t + dt) % 1.0
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        track = painter.viewport().adjusted(0, 1, -1, -2)
+        radius = track.height() / 2
+        painter.setPen(QPen(QColor(BORDER), 1))
+        painter.setBrush(QColor(SURFACE))
+        painter.drawRoundedRect(track, radius, radius)
+
+        span = int(self.maximum() - self.minimum()) or 1
+        frac = max(0.0, min(1.0, (self.value() - self.minimum()) / span))
+        if frac <= 0.0:
+            painter.end()
+            return
+        w = max(radius * 2, int(track.width() * frac))
+        chunk = track.adjusted(0, 0, -(track.width() - w), 0)
+        grad = QLinearGradient(0, chunk.top(), 0, chunk.bottom())
+        grad.setColorAt(0.0, QColor(ACCENT))
+        grad.setColorAt(1.0, QColor(ACCENT).lighter(130))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(grad)
+        painter.drawRoundedRect(chunk, radius, radius)
+
+        if self._sheen_active and chunk.width() > radius * 4:
+            # A narrow bright band slides forward through the filled part.
+            band_w = max(8, int(chunk.width() * 0.16))
+            cx = chunk.left() - band_w + self._sheen_t * (chunk.width() + band_w)
+            sheen = QLinearGradient(cx, 0, cx + band_w, 0)
+            sheen.setColorAt(0.0, QColor(255, 255, 255, 0))
+            sheen.setColorAt(0.5, QColor(255, 255, 255, 70))
+            sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
+            painter.setBrush(sheen)
+            sheen_rect = chunk.adjusted(max(0, int(cx) - chunk.left()), 0,
+                                        0, 0)
+            sheen_rect = sheen_rect.adjusted(0, 1, -1, -1)
+            if sheen_rect.width() > 0:
+                painter.drawRect(sheen_rect)
+        painter.end()
+
+    def visible_width(self) -> int:
+        return self.width()
+
+
+class _GearWidget(QWidget):
+    """Small rotating gear for the panel headline.
+
+    Pure decoration that answers 'is it running?' at a glance; stops
+    spinning the moment the pipeline finishes.
+    """
+
+    TEETH = 10
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setFixedSize(20, 20)
+        self._angle = 0.0
+        self._spinning = False
+
+    def set_spinning(self, spinning: bool) -> None:
+        self._spinning = bool(spinning)
+        self.update()
+
+    def tick(self, dt_degrees: float) -> None:
+        if not self._spinning:
+            return
+        self._angle = (self._angle + dt_degrees) % 360.0
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(2, 2, -2, -2)
+        color = QColor(ACCENT) if self._spinning else QColor(TEXT_MUTED)
+        center = rect.center()
+        outer = min(rect.width(), rect.height()) / 2
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+
+        # NOTE: built from QPointF-center ellipse overloads + polygon
+        # fills on purpose.  The connected-QPainterPath composition and
+        # the (x, y, w, h) overloads crash the PySide6 6.9.x binding
+        # during real raster paints on Windows (C0000005 inside
+        # shiboken6.abi3.dll); the QPointF/polygon primitives do not.
+        painter.drawEllipse(center, outer * 0.86, outer * 0.86)
+        tooth_len = outer * 0.30
+        pitch = outer * 0.86
+        half = tooth_len * 0.5
+        for i in range(self.TEETH):
+            ang = math.radians(
+                self._angle + i * (360.0 / self.TEETH)
+            )
+            dx, dy = math.cos(ang), math.sin(ang)
+            nx, ny = -dy, dx
+            tooth = QPolygonF([
+                QPointF(center.x() + pitch * dx - nx * half,
+                        center.y() + pitch * dy - ny * half),
+                QPointF(center.x() + pitch * dx + nx * half,
+                        center.y() + pitch * dy + ny * half),
+                QPointF(center.x() + (pitch + tooth_len) * dx + nx * half,
+                        center.y() + (pitch + tooth_len) * dy + ny * half),
+                QPointF(center.x() + (pitch + tooth_len) * dx - nx * half,
+                        center.y() + (pitch + tooth_len) * dy - ny * half),
+            ])
+            painter.drawPolygon(tooth)
+
+        # Spokes: cut a smaller hole + the hub.
+        painter.setBrush(QColor(SURFACE_LIGHT))
+        painter.drawEllipse(center, outer * 0.42, outer * 0.42)
+        painter.setBrush(color)
+        painter.drawEllipse(center, outer * 0.20, outer * 0.20)
+        painter.end()
+
 
 class StageProgressPanel(QWidget):
-    """Checklist + progress bar + current message + metric chips."""
+    """Animated pipeline monitor: chips checklist, machine gear, timers.
+
+    The model remains the single source of truth (real pipeline stages,
+    never invented percentages); the panel only renders it with life -
+    stage chips that light up, a spinning gear while a stage runs, a
+    sheen travelling through the progress bar, a typewriter for the
+    current message and an elapsed-time counter.
+    """
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._model: Optional[AnalysisProgressModel] = None
+        self._chips: List[QLabel] = []
+        self._spin_phase = 0
+        self._type_pos = 0
+        self._type_target = ""
+        self._run_seconds = 0
 
         card = QFrame(self)
         card.setObjectName("progressCard")
@@ -255,11 +435,17 @@ class StageProgressPanel(QWidget):
 
         header = QHBoxLayout()
         header.setSpacing(MD)
+        self._gear = _GearWidget()
+        header.addWidget(self._gear)
         self._title = QLabel("ANALYZING DIAGRAM")
         self._title.setFont(QFont(*STATUS_FONT))
         self._title.setStyleSheet(f"color: {TEXT}; border: none; background: transparent;")
         header.addWidget(self._title)
         header.addStretch()
+        self._elapsed_label = QLabel("\u23f1 00:00")
+        self._elapsed_label.setFont(QFont(*STATUS_FONT))
+        self._elapsed_label.setStyleSheet(f"color: {TEXT_MUTED}; border: none; background: transparent;")
+        header.addWidget(self._elapsed_label)
         self._percent_label = QLabel("0%")
         self._percent_label.setFont(QFont(*STATUS_FONT))
         self._percent_label.setStyleSheet(
@@ -267,6 +453,17 @@ class StageProgressPanel(QWidget):
         )
         header.addWidget(self._percent_label)
         card_layout.addLayout(header)
+
+        # Stage chips: one pill per pipeline stage. The plain-text
+        # checklist below stays as the model-to-screen mirror the tests
+        # read, but is kept invisible so the two renderers never fight.
+        chip_row = QWidget()
+        chip_row.setStyleSheet("background: transparent; border: none;")
+        self._chips_layout = QHBoxLayout(chip_row)
+        self._chips_layout.setContentsMargins(0, 0, 0, 0)
+        self._chips_layout.setSpacing(6)
+        self._chips_layout.addStretch()
+        card_layout.addWidget(chip_row)
 
         summary_row = QHBoxLayout()
         summary_row.setSpacing(LG)
@@ -287,17 +484,11 @@ class StageProgressPanel(QWidget):
         summary_row.addWidget(self._detected_row)
         card_layout.addLayout(summary_row)
 
-        self._progress = QProgressBar()
+        self._progress = _SheenProgressBar()
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
         self._progress.setTextVisible(False)
-        self._progress.setFixedHeight(6)
-        self._progress.setStyleSheet(
-            f"QProgressBar {{ background-color: {SURFACE};"
-            f" border: 1px solid {BORDER}; border-radius: {RADIUS_SM}px; }}"
-            f"QProgressBar::chunk {{ background-color: {ACCENT};"
-            f" border-radius: {RADIUS_SM}px; }}"
-        )
+        self._progress.setFixedHeight(8)
         card_layout.addWidget(self._progress)
 
         self._message = QLabel("Preparing analysis\u2026")
@@ -314,6 +505,8 @@ class StageProgressPanel(QWidget):
         self._checklist.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
+        # Hidden mirror: the chips row is the visible renderer.
+        self._checklist.hide()
         card_layout.addWidget(self._checklist)
 
         self._metrics = QLabel("")
@@ -325,6 +518,16 @@ class StageProgressPanel(QWidget):
         outer.setContentsMargins(0, SM, 0, 0)
         outer.setSpacing(0)
         outer.addWidget(card)
+
+        # Machine clock: one fast timer paints every animation (gear
+        # angle, spinner frame, chip pulse, typewriter, sheen) and a
+        # 1 Hz timer walks the elapsed counter.
+        self._anim = QTimer(self)
+        self._anim.setInterval(33)
+        self._anim.timeout.connect(self._on_anim_tick)
+        self._elapsed_timer = QTimer(self)
+        self._elapsed_timer.setInterval(1000)
+        self._elapsed_timer.timeout.connect(self._on_elapsed_tick)
 
     # ------------------------------------------------------------------
     # Model wiring
@@ -360,6 +563,15 @@ class StageProgressPanel(QWidget):
         self._percent_label.setText(f"{percent}%")
 
         running = model.running_entry()
+
+        # Machine state: gears, sheen, spinner and elapsed counter run
+        # only while the pipeline still has a live stage.
+        self._apply_running(
+            running is not None and not getattr(model, "is_finished", False)
+        )
+
+        self._sync_chips(model)
+        self._sync_title(model)
         lines: List[str] = []
         for entry in model.entries:
             glyph = _STATE_GLYPHS.get(entry.state, PENDING)
@@ -382,13 +594,182 @@ class StageProgressPanel(QWidget):
         self._detected_row.setText(f"<b>Detected:</b> {self._detected_text(model)}")
 
         if running is not None and running.message:
-            self._message.setText(running.message)
+            self._set_message(running.message)
         elif running is not None:
-            self._message.setText(f"Running: {running.name}")
+            self._set_message(f"Running: {running.name}")
         else:
-            self._message.setText(self._status_line(model))
+            self._set_message(self._status_line(model))
 
         self._render_metrics(model.collect_metrics())
+
+    # ------------------------------------------------------------------
+    # Animation plumbing
+    # ------------------------------------------------------------------
+
+    def _apply_running(self, running: bool) -> None:
+        """Start/stop the machine: gear, sheen, spinner, elapsed clock."""
+        self._gear.set_spinning(running)
+        self._progress.set_sheen_active(running)
+        self._elapsed_label.setVisible(running)
+        if running:
+            if not self._anim.isActive():
+                self._spin_phase = 0
+                self._run_seconds = 0
+                self._elapsed_label.setText("\u23f1 00:00")
+                self._anim.start()
+                self._elapsed_timer.start()
+            return
+        if self._anim.isActive():
+            self._anim.stop()
+            # Flush any half-typed message so the final text is complete.
+            self._type_pos = len(self._type_target)
+            self._message.setText(self._type_target)
+        if self._elapsed_timer.isActive():
+            self._elapsed_timer.stop()
+
+    def _on_anim_tick(self) -> None:
+        self._spin_phase = (self._spin_phase + 1) % 64
+        self._gear.tick(8.0)  # 8 deg per 33ms ~ one turn per 1.5s
+        self._progress.sheen_tick(1.0 / 45.0)
+        # Typewriter reveals ~5 chars per tick.
+        if self._type_pos < len(self._type_target):
+            self._type_pos = min(
+                len(self._type_target), self._type_pos + 5
+            )
+            self._message.setText(self._type_target[: self._type_pos])
+        self._refresh_running_chips()
+
+    def _on_elapsed_tick(self) -> None:
+        self._run_seconds += 1
+        mm, ss = divmod(self._run_seconds, 60)
+        self._elapsed_label.setText(f"\u23f1 {mm:02d}:{ss:02d}")
+
+    def _set_message(self, text: str) -> None:
+        """Retype the current message only when it actually changed.
+
+        The typewriter only runs while the machine is animating; when
+        the pipeline is idle (finished/failed) the full text appears
+        instantly, otherwise the completion message would stay blank.
+        """
+        if text == self._type_target:
+            if self._type_pos >= len(self._type_target) or (
+                not self._anim.isActive()
+            ):
+                self._message.setText(text)
+            return
+        self._type_target = text
+        if not self._anim.isActive():
+            self._type_pos = len(text)
+            self._message.setText(text)
+            return
+        self._type_pos = 0
+        self._message.setText("")
+
+    def _sync_chips(self, model: Any) -> None:
+        """One chip per stage; created lazily, restyled on every update."""
+        entries = model.entries
+        while len(self._chips) < len(entries):
+            chip = QLabel("", self)
+            chip.setObjectName("stageChip")
+            chip.setFont(QFont(*BODY_SMALL_FONT))
+            insert_at = self._chips_layout.count() - 1  # before the stretch
+            self._chips_layout.insertWidget(insert_at, chip)
+            self._chips.append(chip)
+        # Scheme: chip index mirrors entries order; when stages are
+        # removed (never expected) drop extras defensively.
+        while len(self._chips) > len(entries):
+            chip = self._chips.pop()
+            self._chips_layout.removeWidget(chip)
+            chip.deleteLater()
+        for chip, entry in zip(self._chips, entries):
+            chip.setToolTip(entry.message or (entry.name or entry.stage_id))
+        self._refresh_running_chips()
+
+    def _refresh_running_chips(self) -> None:
+        """Animate chips cheaply: restyle on state change only.
+
+        The running chip's spinner glyph rotates via setText (~4 Hz);
+        its stylesheet is touched ONLY on state transitions so we never
+        repolish QSS 30 times per second.
+        """
+        model = self._model
+        if model is None:
+            return
+        frames = len(_SPINNER_FRAMES)
+        frame_idx = (self._spin_phase // 8) % frames
+        for chip, entry in zip(self._chips, model.entries):
+            state = entry.state
+            last = getattr(chip, "_styled_state", None)
+            if last != state:
+                self._restyle_chip(chip, state)
+                chip._styled_state = state
+            if state == RUNNING and getattr(chip, "_frame_idx", -1) != (
+                frame_idx
+            ):
+                chip._frame_idx = frame_idx
+                idx = self._chips.index(chip)
+                name = ""
+                if idx >= 0 and self._model is not None:
+                    entries = self._model.entries
+                    if idx < len(entries):
+                        name = entries[idx].name or entries[idx].stage_id
+                chip.setText(
+                    f"{_SPINNER_FRAMES[frame_idx]} {name}"
+                )
+
+    def _restyle_chip(self, chip: QLabel, state: str) -> None:
+        color = _STATE_COLORS.get(state, TEXT_MUTED)
+        idx = self._chips.index(chip) if chip in self._chips else -1
+        name = ""
+        if idx >= 0 and self._model is not None:
+            entries = self._model.entries
+            if idx < len(entries):
+                name = entries[idx].name or entries[idx].stage_id
+        if state == RUNNING:
+            glyph = _SPINNER_FRAMES[
+                (self._spin_phase // 8) % len(_SPINNER_FRAMES)
+            ]
+            chip._frame_idx = (self._spin_phase // 8) % len(_SPINNER_FRAMES)
+            chip.setText(f"{glyph} {name}")
+            chip.setStyleSheet(
+                f"QLabel {{ background-color: {_rgba(ACCENT, 60)};"
+                f" color: {ACCENT}; border: 1px solid {ACCENT};"
+                f" border-radius: 10px; padding: 3px 10px;"
+                f" font-weight: 600; }}"
+            )
+            return
+        glyph = _STATE_GLYPHS.get(state, "\u25CB")
+        chip.setText(f"{glyph} {name}")
+        if state == COMPLETED:
+            bg = _rgba(SUCCESS, 26)
+        elif state == FAILED:
+            bg = _rgba(DANGER, 26)
+        elif state == REVIEW_REQUIRED:
+            bg = _rgba(WARNING, 26)
+        else:
+            bg = _rgba(TEXT_MUTED, 16)
+        chip.setStyleSheet(
+            f"QLabel {{ background-color: {bg}; color: {color};"
+            f" border: 1px solid {bg}; border-radius: 10px;"
+            f" padding: 3px 10px; }}"
+        )
+
+    def _sync_title(self, model: Any) -> None:
+        """Header reflects the machine state: running vs. outcome."""
+        if not getattr(model, "is_finished", False):
+            self._title.setText("ANALYZING DIAGRAM")
+            self._title.setStyleSheet(
+                f"color: {TEXT}; border: none; background: transparent;"
+            )
+            return
+        if (getattr(model, "outcome", "") or "COMPLETED") == "FAILED":
+            color, label = DANGER, "ANALYSIS FAILED"
+        else:
+            color, label = SUCCESS, "ANALYSIS COMPLETE"
+        self._title.setText(label)
+        self._title.setStyleSheet(
+            f"color: {color}; border: none; background: transparent;"
+        )
 
     def _status_line(self, model: Any) -> str:
         if getattr(model, "is_finished", False):

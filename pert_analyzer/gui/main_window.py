@@ -562,11 +562,9 @@ class MainWindow(QMainWindow):
         self._refresh_pages()
         self.statusBar().showMessage(f"Analysis completed: {state.value}")
 
-        if state == AppState.REVIEW_REQUIRED:
-            self._on_nav(NavDestination.REVIEW)
-        elif state == AppState.VALIDATION_REQUIRED:
-            self._on_nav(NavDestination.VALIDATE)
-
+        # The user asked to stay on the Analyze page and watch the
+        # processing machine wind down — navigation to Review/Validation
+        # stays manual (sidebar, Open Review Center button).
         logger.info("Analysis completed: state=%s", state.value)
 
     def _on_analysis_failed(self, msg: str) -> None:

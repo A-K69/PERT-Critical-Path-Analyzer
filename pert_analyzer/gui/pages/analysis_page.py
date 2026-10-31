@@ -334,14 +334,21 @@ class ImageView(QLabel):
             return
         view_w, view_h = max(1, self.width()), max(1, self.height())
         disp_w, disp_h = self._content_size()
+        # The paint formula already centres fitting content:
+        #   x = (view - disp) / 2 + pan
+        # so when the image fits, pan must sit at 0.  Forcing pan to
+        # (view - disp) / 2 here double-centres and shoves the image
+        # toward one edge (the off-centre bug on Analyze).
         slip_x = disp_w - view_w
         slip_y = disp_h - view_h
-        lo_x, hi_x = -max(0, slip_x / 2), max(0, slip_x / 2)
-        lo_y, hi_y = -max(0, slip_y / 2), max(0, slip_y / 2)
         if disp_w <= view_w:
-            lo_x = hi_x = int(round((view_w - disp_w) / 2))
+            lo_x = hi_x = 0
+        else:
+            lo_x, hi_x = -slip_x / 2, slip_x / 2
         if disp_h <= view_h:
-            lo_y = hi_y = int(round((view_h - disp_h) / 2))
+            lo_y = hi_y = 0
+        else:
+            lo_y, hi_y = -slip_y / 2, slip_y / 2
         self._pan.setX(max(int(lo_x), min(int(hi_x), self._pan.x())))
         self._pan.setY(max(int(lo_y), min(int(hi_y), self._pan.y())))
 

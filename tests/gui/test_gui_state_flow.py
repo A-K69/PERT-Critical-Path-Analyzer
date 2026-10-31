@@ -1,5 +1,5 @@
 """
-Tests for session updates, auto-navigation, and responsiveness.
+Tests for session updates, stay-on-analyze navigation, and responsiveness.
 """
 
 from __future__ import annotations
@@ -52,9 +52,10 @@ def test_session_updates_after_analysis(
     assert window._session.review_summary["duration_reviews_pending"] == 1
 
 
-def test_auto_nav_to_review_when_review_items(
+def test_user_stays_on_analyze_when_review_items(
     window: MainWindow, tmp_image: str, qapp: "QApplication"  # noqa: F821
 ) -> None:
+    """Analysis must NOT auto-jump: the user stays to watch the machine."""
     wf = FakeWorkflow(pa=1, pd=0, pdr=0, review_required=True)
     window._backend = FakeBackend(workflow=wf)
     window._analysis_page.load_image(tmp_image)
@@ -64,12 +65,14 @@ def test_auto_nav_to_review_when_review_items(
         qapp.processEvents()
         time.sleep(0.01)
 
-    assert window._stack.currentIndex() == NavDestination.REVIEW.value
+    assert window._stack.currentIndex() == NavDestination.ANALYZE.value
+    assert window._session.state == AppState.REVIEW_REQUIRED
 
 
-def test_auto_nav_to_validation_when_no_review_items(
+def test_user_stays_on_analyze_when_no_review_items(
     window: MainWindow, tmp_image: str, qapp: "QApplication"  # noqa: F821
 ) -> None:
+    """Same stay-on-analyze rule when validation is the next step."""
     wf = FakeWorkflow(pa=0, pd=0, pdr=0, review_required=False)
     window._backend = FakeBackend(workflow=wf)
     window._analysis_page.load_image(tmp_image)
@@ -79,7 +82,7 @@ def test_auto_nav_to_validation_when_no_review_items(
         qapp.processEvents()
         time.sleep(0.01)
 
-    assert window._stack.currentIndex() == NavDestination.VALIDATE.value
+    assert window._stack.currentIndex() == NavDestination.ANALYZE.value
     assert window._session.state == AppState.VALIDATION_REQUIRED
 
 

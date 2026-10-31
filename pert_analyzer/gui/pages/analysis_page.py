@@ -5,12 +5,21 @@ Analysis page: image upload, preview, Analyze button, status panel.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import tempfile
 import uuid
 from typing import Any, Optional
 
-from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QPoint,
+    QPointF,
+    QRect,
+    QRectF,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -40,6 +49,7 @@ from pert_analyzer.gui.themes.palette import (
     ACCENT,
     BORDER,
     DANGER,
+    INFO,
     SURFACE,
     SURFACE_LIGHT,
     SUCCESS,
@@ -111,6 +121,13 @@ def _accent_color(alpha: int) -> QColor:
     return color
 
 
+def _color_alpha(hex_name: str, alpha: int) -> QColor:
+    """Any palette hex with an explicit alpha (same safe construction)."""
+    color = QColor(hex_name)
+    color.setAlpha(int(alpha))
+    return color
+
+
 class ImageView(QLabel):
     """
     Image preview with fit / zoom / pan / reset and drag-and-drop support.
@@ -139,6 +156,17 @@ class ImageView(QLabel):
         self._scan_timer = QTimer(self)
         self._scan_timer.setInterval(33)
         self._scan_timer.timeout.connect(self._advance_scan)
+        # A-5 side art: real pipeline counters mirrored beside the image
+        # (nodes ladder LEFT from ``shapes``, arrows ladder RIGHT from
+        # ``arrows``/``activities``).  Targets are pushed by the page;
+        # eased values follow on the 33ms machine beat in _advance_scan.
+        self._art_nodes = 0.0
+        self._art_edges = 0.0
+        self._art_nodes_t = 0.0
+        self._art_edges_t = 0.0
+        self._art_running = False
+        self._art_done = False
+        self._art_failed = False
         self.setMinimumHeight(240)
         self.setAcceptDrops(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -166,6 +194,35 @@ class ImageView(QLabel):
         self._scan_t += 1.0 / 60.0
         if self._scan_t >= 2.0:
             self._scan_t -= 2.0
+        # Side-art counters ease on the same machine beat (0.16/frame
+        # ~= the panel wireframe rate, same visual cadence).
+        self._art_nodes += (self._art_nodes_t - self._art_nodes) * 0.16
+        self._art_edges += (self._art_edges_t - self._art_edges) * 0.16
+        self.update()
+
+    def set_live_counts(
+        self, counts: Any, running: bool, done: bool, failed: bool
+    ) -> None:
+        """Feed the side art REAL pipeline counters + session state.
+
+        ``shapes`` drives the left nodes ladder, ``arrows`` (with
+        ``activities`` as the assembly-stage alias) drives the right
+        arrows ladder.  Nothing is invented: when the pipeline has not
+        reported a counter yet its ladder simply stays at 0.  Idle
+        states snap (no beat to ease with), running states ease.
+        """
+        counts = counts or {}
+        self._art_nodes_t = float(counts.get("shapes") or 0)
+        edges = counts.get("arrows")
+        if not edges:
+            edges = counts.get("activities")
+        self._art_edges_t = float(edges or 0)
+        self._art_running = bool(running)
+        self._art_done = bool(done)
+        self._art_failed = bool(failed)
+        if not self._art_running:
+            self._art_nodes = self._art_nodes_t
+            self._art_edges = self._art_edges_t
         self.update()
 
     # ------------------------------------------------------------------
@@ -413,6 +470,10 @@ class ImageView(QLabel):
                 painter, x, y, target_w, target_h, edge
             )
 
+        # A-5 side art: real-counter ladders living in the viewer's side
+        # margins while the machine reads (or just finished reading).
+        self._paint_side_art(painter, x, y, target_w, target_h, edge)
+
         if self._drag_hover:
             pen = QPen(QColor(ACCENT), 2)
             painter.setPen(pen)
@@ -478,6 +539,200 @@ class ImageView(QLabel):
             painter.drawLine(bx1 - length, by0, bx1, by0)
             painter.drawLine(bx0 + length, by1, bx0, by1)
             painter.drawLine(bx0, by1 - length, bx0, by1)
+        painter.restore()
+
+    # ------------------------------------------------------------------
+    # A-5 side art: the viewer's margins become a live build site
+    # ------------------------------------------------------------------
+
+    _ART_MARGIN_MIN = 62          # px: don't paint ladders in thin margins
+    _ART_NODES_SLOTS = 22         # ladder slots (dots), real counts in captions
+    _ART_EDGES_SLOTS = 18         # ladder slots (chevrons)
+
+    def _paint_side_art(
+        self,
+        painter: "QPainter",
+        img_x: float,
+        img_y: float,
+        img_w: float,
+        img_h: float,
+        frame: "QRect",
+    ) -> None:
+        """Concept A beside the image: nodes ladder LEFT (grows with
+        ``shapes``), arrows ladder RIGHT (grows with ``arrows`` /
+        ``activities``).  Captions carry the REAL counters; the art is
+        purely decorative and honest — it only ever mirrors what the
+        pipeline already reported."""
+        nodes_gone = (
+            self._art_nodes <= 0.01
+            and self._art_edges <= 0.01
+            and self._art_nodes_t <= 0.01
+            and self._art_edges_t <= 0.01
+        )
+        active = self._scanning or self._art_done or self._art_failed
+        if nodes_gone or not active:
+            return
+
+        if self._art_failed:
+            nodes_color, edges_color = DANGER, DANGER
+        elif self._art_done:
+            nodes_color, edges_color = SUCCESS, SUCCESS
+        else:
+            nodes_color, edges_color = ACCENT, INFO
+
+        # The ladders share the image's vertical span so the eye reads
+        # image + art as one composition, like the approved board.
+        y0 = img_y + 26.0
+        y1 = img_y + img_h - 10.0
+        if y1 - y0 < 40.0:
+            return
+        caption_y = img_y + 4.0
+
+        left_w = int(img_x - frame.left())
+        if left_w >= self._ART_MARGIN_MIN:
+            cx = frame.left() + left_w / 2.0
+            self._paint_ladder(
+                painter,
+                cx=cx,
+                y0=y0,
+                y1=y1,
+                caption_x=frame.left(),
+                caption_w=left_w,
+                caption_y=caption_y,
+                shown=self._art_nodes,
+                target=self._art_nodes_t,
+                slots=self._ART_NODES_SLOTS,
+                color=nodes_color,
+                label="SHAPES",
+                dots=True,
+            )
+
+        right_x = img_x + img_w
+        right_w = int(frame.right() + 1 - right_x)
+        if right_w >= self._ART_MARGIN_MIN:
+            cx = right_x + right_w / 2.0
+            self._paint_ladder(
+                painter,
+                cx=cx,
+                y0=y0,
+                y1=y1,
+                caption_x=right_x,
+                caption_w=right_w,
+                caption_y=caption_y,
+                shown=self._art_edges,
+                target=self._art_edges_t,
+                slots=self._ART_EDGES_SLOTS,
+                color=edges_color,
+                label="ARROWS",
+                dots=False,
+            )
+
+    def _paint_ladder(
+        self,
+        painter: "QPainter",
+        cx: float,
+        y0: float,
+        y1: float,
+        caption_x: float,
+        caption_w: float,
+        caption_y: float,
+        shown: float,
+        target: float,
+        slots: int,
+        color: str,
+        label: str,
+        dots: bool,
+    ) -> None:
+        """One ladder (dots OR chevrons) grown from a REAL counter.
+
+        ``shown`` is eased; ``target`` is the pipeline's latest number.
+        Caption always shows the real ints.  Painted with the surviving
+        primitive set only (int drawLine + drawEllipse(QPointF, f, f)).
+        """
+        if target < 0.5:
+            return  # nothing reported yet — silence is honest
+
+        slots = max(2, min(slots, int(target), int(y1 - y0) // 9))
+        filled = round(shown / target * slots)
+        filled = max(0, min(slots, filled))
+        frac = shown / target * slots - filled  # frontier easing fraction
+
+        painter.save()
+
+        # Caption: the truth, in real numbers.
+        painter.setFont(QFont(*BODY_SMALL_FONT))
+        painter.setPen(_color_alpha(TEXT_SECONDARY, 235))
+        painter.drawText(
+            QRectF(caption_x, caption_y, caption_w, 14.0),
+            Qt.AlignmentFlag.AlignHCenter,
+            f"{label} {int(round(shown))}/{int(round(target))}",
+        )
+
+        if dots:
+            # Vertical spine the dots ride on.
+            painter.setPen(QPen(_color_alpha(color, 120), 1))
+            painter.drawLine(int(cx), int(y0), int(cx), int(y1))
+            step = (y1 - y0) / (slots - 1)
+            for i in range(slots):
+                y = y0 + step * i
+                p = QPointF(cx, y)
+                if i < filled:
+                    r = 3.6
+                    is_front = (i == filled - 1) and self._art_running
+                    if is_front:
+                        breath = 1.0 + 0.22 * math.sin(self._scan_t * 12.0)
+                        r *= breath
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(_color_alpha(color, 235))
+                    painter.drawEllipse(p, r, r)
+                    if is_front:
+                        painter.setPen(QPen(_color_alpha(color, 70), 1))
+                        painter.setBrush(Qt.BrushStyle.NoBrush)
+                        painter.drawEllipse(p, r + 3.5, r + 3.5)
+                elif i == filled and frac > 0.05 and self._art_running:
+                    # The node being born: ghost that fills in.
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(
+                        _color_alpha(color, max(28, int(200 * frac)))
+                    )
+                    painter.drawEllipse(p, 2.2 + 1.4 * frac, 2.2 + 1.4 * frac)
+                else:
+                    painter.setPen(QPen(_color_alpha(color, 55), 1))
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawEllipse(p, 3.2, 3.2)
+        else:
+            # Arrows climb: chevrons point UP, lit from the bottom.
+            step = (y1 - y0) / (slots - 1)
+            h = 5.5
+            for i in range(slots):
+                y = y1 - step * i   # bottom -> top
+                lit = i < filled
+                if lit:
+                    is_front = (i == filled - 1) and self._art_running
+                    a = int(235 - 175 * math.sin(self._scan_t * 12.0) * 0.5)
+                    a = max(60, min(235, a))
+                    painter.setPen(QPen(_color_alpha(color, a), 1.7))
+                    painter.drawLine(int(cx - h), int(y + h * 0.62),
+                                     int(cx), int(y - h * 0.62))
+                    painter.drawLine(int(cx), int(y - h * 0.62),
+                                     int(cx + h), int(y + h * 0.62))
+                    if is_front:
+                        painter.setPen(QPen(_color_alpha(color, 70), 1))
+                        painter.setBrush(Qt.BrushStyle.NoBrush)
+                        painter.drawEllipse(QPointF(cx, y), 6.8, 6.8)
+                elif i == filled and frac > 0.05 and self._art_running:
+                    # Being traced: partial chevron from its tip.
+                    dy = h * 0.62 * frac
+                    painter.setPen(QPen(_color_alpha(color, 140), 1.7))
+                    painter.drawLine(int(cx - h), int(y + h * 0.62),
+                                     int(cx), int(y + h * 0.62 - dy))
+                else:
+                    painter.setPen(QPen(_color_alpha(color, 45), 1))
+                    painter.drawLine(int(cx - h), int(y + h * 0.62),
+                                     int(cx), int(y - h * 0.62))
+                    painter.drawLine(int(cx), int(y - h * 0.62),
+                                     int(cx + h), int(y + h * 0.62))
+
         painter.restore()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
@@ -814,6 +1069,7 @@ class AnalysisPage(QWidget):
         self._progress_panel.setVisible(True)
         # Machine eye: sweep the diagram while the pipeline reads it.
         self._image_view.set_scanning(True)
+        self._sync_side_art()
         self._status_panel.set_status("Analyzing... processing diagram", "accent")
 
     def on_progress(self, stage_progress: Any) -> None:
@@ -822,6 +1078,7 @@ class AnalysisPage(QWidget):
             return
         self._progress_panel.setVisible(True)
         self._progress_model.handle_stage(stage_progress)
+        self._sync_side_art()
 
     def show_completed(
         self, workflow: Any, review_item_total: int = 0
@@ -833,12 +1090,14 @@ class AnalysisPage(QWidget):
         ):
             self._progress_model.note_metric("review_items", review_item_total)
         self._image_view.set_scanning(False)
+        self._sync_side_art()
         self._status_panel.set_status("Analysis completed", "success")
 
     def show_failed(self, message: str) -> None:
         """Finalize the model after a failed analysis run."""
         self._progress_model.finish(ok=False, message=message)
         self._image_view.set_scanning(False)
+        self._sync_side_art()
         self._status_panel.set_status(f"Analysis failed: {message}", "danger")
 
     def reset_analysis_progress(self) -> None:
@@ -846,6 +1105,23 @@ class AnalysisPage(QWidget):
         self._progress_model.reset()
         self._progress_panel.setVisible(False)
         self._image_view.set_scanning(False)
+        self._sync_side_art()
+
+    def _sync_side_art(self) -> None:
+        """Mirror the model's REAL counters into the viewer's side art.
+
+        Same honest data the machine panel's wireframe eats: ``shapes``
+        → nodes ladder, ``arrows``/``activities`` → arrows ladder.
+        """
+        model = self._progress_model
+        finished = bool(getattr(model, "is_finished", False))
+        outcome = getattr(model, "outcome", "") or "COMPLETED"
+        self._image_view.set_live_counts(
+            model.collect_metrics(),
+            running=not finished and model.running_entry() is not None,
+            done=finished and outcome != "FAILED",
+            failed=finished and outcome == "FAILED",
+        )
 
     def progress_panel(self) -> Optional[StageProgressPanel]:
         return self._progress_panel

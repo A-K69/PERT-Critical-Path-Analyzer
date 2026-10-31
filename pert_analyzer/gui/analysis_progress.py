@@ -19,6 +19,7 @@ from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
+    QFontMetrics,
     QPolygonF,
     QLinearGradient,
     QPainter,
@@ -652,6 +653,7 @@ class StageProgressPanel(QWidget):
         self._chips_layout.setSpacing(6)
         self._chips_layout.addStretch()
         card_layout.addWidget(chip_row)
+        self._chip_row = chip_row  # A-5b elide budgets measure this row
 
         # A-4 live wireframe: the mini AON graph the user asked for.
         # It sits LEFT of the textual rows (stage/bar/message/metrics)
@@ -877,6 +879,11 @@ class StageProgressPanel(QWidget):
             chip = QLabel("", self)
             chip.setObjectName("stageChip")
             chip.setFont(QFont(*BODY_SMALL_FONT))
+            chip._full_text = ""
+            chip._px_budget = 0.0
+            chip._is_elided = False
+            chip._chip_name = ""
+            chip._default_tip = ""
             insert_at = self._chips_layout.count() - 1  # before the stretch
             self._chips_layout.insertWidget(insert_at, chip)
             self._chips.append(chip)
@@ -887,8 +894,14 @@ class StageProgressPanel(QWidget):
             self._chips_layout.removeWidget(chip)
             chip.deleteLater()
         for chip, entry in zip(self._chips, entries):
-            chip.setToolTip(entry.message or (entry.name or entry.stage_id))
+            chip._chip_name = entry.name or entry.stage_id
+            chip._default_tip = entry.message or chip._chip_name
+            # Tooltip default is the stage message; an elided chip
+            # overrides it with the full name inside _set_chip_text.
+            if not getattr(chip, "_is_elided", False):
+                chip.setToolTip(chip._default_tip)
         self._refresh_running_chips()
+        self._apply_chip_budgets()
 
     def _refresh_running_chips(self) -> None:
         """Animate chips cheaply: restyle on state change only.
@@ -912,14 +925,9 @@ class StageProgressPanel(QWidget):
                 frame_idx
             ):
                 chip._frame_idx = frame_idx
-                idx = self._chips.index(chip)
-                name = ""
-                if idx >= 0 and self._model is not None:
-                    entries = self._model.entries
-                    if idx < len(entries):
-                        name = entries[idx].name or entries[idx].stage_id
-                chip.setText(
-                    f"{_SPINNER_FRAMES[frame_idx]} {name}"
+                name = getattr(chip, "_chip_name", "") or ""
+                self._set_chip_text(
+                    chip, f"{_SPINNER_FRAMES[frame_idx]} {name}"
                 )
 
     def _restyle_chip(self, chip: QLabel, state: str) -> None:
@@ -935,7 +943,7 @@ class StageProgressPanel(QWidget):
                 (self._spin_phase // 8) % len(_SPINNER_FRAMES)
             ]
             chip._frame_idx = (self._spin_phase // 8) % len(_SPINNER_FRAMES)
-            chip.setText(f"{glyph} {name}")
+            self._set_chip_text(chip, f"{glyph} {name}")
             chip.setStyleSheet(
                 f"QLabel {{ background-color: {_rgba(ACCENT, 60)};"
                 f" color: {ACCENT}; border: 1px solid {ACCENT};"
@@ -944,7 +952,7 @@ class StageProgressPanel(QWidget):
             )
             return
         glyph = _STATE_GLYPHS.get(state, "\u25CB")
-        chip.setText(f"{glyph} {name}")
+        self._set_chip_text(chip, f"{glyph} {name}")
         if state == COMPLETED:
             bg = _rgba(SUCCESS, 26)
         elif state == FAILED:
@@ -958,6 +966,100 @@ class StageProgressPanel(QWidget):
             f" border: 1px solid {bg}; border-radius: 10px;"
             f" padding: 3px 10px; }}"
         )
+
+    # ------------------------------------------------------------------
+    # A-5b: smart chip elide — one tidy row, full name on hover
+    # ------------------------------------------------------------------
+
+    _CHIP_TEXT_PAD = 20.0  # QSS padding: 3px 10px  → 20px horizontal
+
+    def _set_chip_text(self, chip: QLabel, text: str) -> None:
+        """Route EVERY chip text assignment through here.
+
+        Keeps ``chip._full_text`` authoritative, honours the chip's
+        width budget (set by ``_apply_chip_budgets``) by eliding to
+        '…', and swaps the tooltip to the full stage name while the
+        text is trimmed.  Chips are never dropped: membership in
+        ``_chips`` (what the tests read) is untouched.
+        """
+        chip._full_text = text
+        budget = float(getattr(chip, "_px_budget", 0.0) or 0.0)
+        fm = QFontMetrics(chip.font())
+        if budget >= 8.0 and fm.horizontalAdvance(text) > budget:
+            budget_px = max(8.0, budget - self._CHIP_TEXT_PAD)
+            elided = fm.elidedText(
+                text, Qt.TextElideMode.ElideRight, int(budget_px)
+            )
+            chip.setText(elided)
+            chip._is_elided = True
+            chip.setToolTip(
+                getattr(chip, "_chip_name", "") or text
+            )
+        else:
+            chip.setText(text)
+            chip._is_elided = False
+            chip.setToolTip(
+                getattr(chip, "_default_tip", "") or text
+            )
+
+    def _apply_chip_budgets(self) -> None:
+        """Water-filling budgets so 12 pills share one row gracefully.
+
+        Every chip first asks for its natural width; when the row
+        cannot hold them all the surplus is spread evenly (smallest
+        labels keep theirs, roomy labels donate).  Result: minimum
+        damage per pill, right-side '…', full name on hover.
+        """
+        row = getattr(self, "_chip_row", None)
+        chips = self._chips
+        n = len(chips)
+        if n == 0 or row is None:
+            return
+        avail = row.width()
+        if avail <= 0:
+            return  # layout not resolved yet; resizeEvent will call us
+        gap = self._chips_layout.spacing() or 6
+        usable = avail - gap * (n - 1)
+        if usable <= 0:
+            return
+        natural = []
+        for chip in chips:
+            text = getattr(chip, "_full_text", "") or chip.text()
+            fm = QFontMetrics(chip.font())
+            natural.append(
+                fm.horizontalAdvance(text) + self._CHIP_TEXT_PAD
+            )
+        if sum(natural) <= usable:
+            for chip in chips:
+                if getattr(chip, "_px_budget", 0.0) or getattr(
+                    chip, "_is_elided", False
+                ):
+                    chip._px_budget = 0.0
+                    self._set_chip_text(
+                        chip, getattr(chip, "_full_text", "")
+                    )
+            return
+        budgets = [usable / n] * n
+        for _pass in range(4):
+            freed = 0.0
+            donors = []
+            for i, (budget, nat) in enumerate(zip(budgets, natural)):
+                if nat <= budget:
+                    freed += budget - nat
+                    budgets[i] = float(nat)
+                    donors.append(i)
+            if not donors or freed <= 0.5:
+                break
+            share = freed / len(donors)
+            for i in donors:
+                budgets[i] += share
+        for chip, budget in zip(chips, budgets):
+            chip._px_budget = float(budget)
+            self._set_chip_text(chip, getattr(chip, "_full_text", ""))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._apply_chip_budgets()
 
     def _sync_title(self, model: Any) -> None:
         """Header reflects the machine state: running vs. outcome."""

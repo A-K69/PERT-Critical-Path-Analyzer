@@ -404,6 +404,194 @@ class _GearWidget(QWidget):
         painter.end()
 
 
+class _LiveWireframe(QWidget):
+    """Mini AON wireframe that visibly "builds" while the pipeline runs.
+
+    Decorative, but driven only by real pipeline counters: ``shapes``
+    grows the nodes, ``arrows`` (or ``activities`` while the graph is
+    assembled) grows the edges.  Nothing is invented: the wireframe
+    simply mirrors what the stages already report.
+
+    Painted exclusively with the primitive set that survived the
+    PySide6 6.9.1 forensics: ``fillRect``, pen + ``drawRoundedRect``
+    over a ``QRectF``, ``drawEllipse(QPointF, r, r)`` and int
+    ``drawLine``.  No ``QPainterPath``, no four-float ellipse, no
+    two-argument ``QColor``.
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setFixedWidth(150)
+        self.setMinimumHeight(96)
+        # Real counter targets + eased visible counters.
+        self._target_nodes = 0
+        self._target_edges = 0
+        self._shown_nodes = 0.0
+        self._shown_edges = 0.0
+        self._running = False
+        self._done = False
+        self._failed = False
+        self._phase = 0
+
+    # ------------------------------------------------------------------
+    # Data plumbing
+    # ------------------------------------------------------------------
+
+    def set_metrics(
+        self,
+        metrics: Dict[str, Any],
+        running: bool,
+        done: bool,
+        failed: bool,
+    ) -> None:
+        native = dict(metrics or {})
+        self._target_nodes = int(native.get("shapes") or 0)
+        edges = native.get("arrows")
+        if not edges:
+            edges = native.get("activities")
+        self._target_edges = int(edges or 0)
+        self._running = bool(running)
+        self._done = bool(done)
+        self._failed = bool(failed)
+        if not self._running:
+            # Idle/finished: no beat to ease with — snap into place so
+            # resets drain instantly and the final frame is static.
+            self._shown_nodes = float(self._target_nodes)
+            self._shown_edges = float(self._target_edges)
+        self.update()
+
+    def tick(self, phase: int) -> None:
+        """One 33ms machine beat: ease the build counters toward targets."""
+        self._phase = phase
+        rate = 0.16
+        self._shown_nodes += (self._target_nodes - self._shown_nodes) * rate
+        self._shown_edges += (self._target_edges - self._shown_edges) * rate
+        self.update()
+
+    # ------------------------------------------------------------------
+    # Painting
+    # ------------------------------------------------------------------
+
+    def _node_layout(self, count: int):
+        """Deterministic grid positions for ``count`` nodes."""
+        w = float(self.width())
+        h = float(self.height())
+        cols = max(3, min(8, int((w - 24.0) // 26.0)))
+        cols = max(cols, 1)
+        rows = max(1, (count + cols - 1) // cols)
+        gap_x = (w - 24.0) / cols
+        # Vertically the grid must FIT the widget: squeeze the row gap
+        # down before letting rows clip (22 nodes on a narrow well must
+        # stay fully visible in ~110px).
+        gap_y = max(11.0, min(26.0, (h - 20.0) / rows))
+        top = (h - (rows - 1) * gap_y) / 2.0
+        top = max(8.0, top)
+        positions = []
+        for idx in range(count):
+            r, c = divmod(idx, cols)
+            positions.append(QPointF(12.0 + gap_x * (c + 0.5),
+                                     top + gap_y * r))
+        return positions
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w = float(self.width())
+        h = float(self.height())
+
+        painter.fillRect(QRectF(0, 0, w, h), QColor(SURFACE))
+        painter.setPen(QPen(QColor(BORDER), 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(QRectF(0.5, 0.5, w - 1, h - 1),
+                                RADIUS_MD, RADIUS_MD)
+
+        n_shown = int(self._shown_nodes)
+        if n_shown <= 0:
+            # Idle well: a couple of ghost rings waiting for data.
+            ghost = QColor(BORDER)
+            ghost.setAlpha(70)
+            painter.setPen(QPen(ghost, 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(w * 0.30, h * 0.50), 6.0, 6.0)
+            painter.drawEllipse(QPointF(w * 0.50, h * 0.42), 6.0, 6.0)
+            painter.drawEllipse(QPointF(w * 0.70, h * 0.54), 6.0, 6.0)
+            painter.end()
+            return
+
+        positions = self._node_layout(n_shown)
+        if self._done and not self._failed:
+            edge_color = QColor(SUCCESS)
+            node_color = QColor(SUCCESS)
+        elif self._failed:
+            edge_color = QColor(DANGER)
+            node_color = QColor(DANGER)
+        else:
+            edge_color = QColor(ACCENT)
+            node_color = QColor(ACCENT)
+
+        # --- edges first so nodes sit on top.
+        e_shown = int(self._shown_edges)
+        frac_e = self._shown_edges - e_shown
+        chain = max(n_shown - 1, 0)
+        links = []
+        for k in range(min(e_shown, chain)):
+            links.append((k, k + 1, 1.0))
+        extras = max(0, e_shown - chain)
+        for k in range(extras):
+            base = k % max(chain, 1)
+            b = min(n_shown - 1, base + 2)
+            if b > base:
+                links.append((base, b, 1.0))
+        if self._running and frac_e > 0.05 and links:
+            last = links[-1]
+            links[-1] = (last[0], last[1], min(1.0, frac_e))
+        painter.setPen(QPen(edge_color, 1.4))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for a, b, t in links:
+            pa, pb = positions[a], positions[b]
+            if t < 1.0:
+                mx = pa.x() + (pb.x() - pa.x()) * t
+                my = pa.y() + (pb.y() - pa.y()) * t
+                painter.drawLine(int(pa.x()), int(pa.y()), int(mx), int(my))
+            else:
+                painter.drawLine(int(pa.x()), int(pa.y()),
+                                 int(pb.x()), int(pb.y()))
+
+        # --- nodes.
+        pop = self._shown_nodes - n_shown
+        for i, p in enumerate(positions):
+            base_f = 1.0
+            r = 5.0
+            fill = QColor(node_color)
+            is_popping = (i == n_shown - 1) and (self._running or pop > 0.02)
+            if is_popping and pop > 0.02:
+                r = 3.0 + 2.5 * pop
+                base_f = 0.55 + 0.45 * pop
+                fill.setAlpha(max(40, int(230 * pop)))
+            if self._running and is_popping:
+                breath = 1.0 + 0.18 * math.sin(self._phase * 0.6)
+                r *= breath
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(fill)
+            painter.drawEllipse(p, r * base_f, r * base_f)
+            if self._running and is_popping:
+                halo = QColor(node_color)
+                halo.setAlpha(70)
+                painter.setPen(QPen(halo, 1))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawEllipse(p, r + 3.0, r + 3.0)
+
+        if self._failed:
+            # A clear "this is where it died" mark on the last node.
+            p = positions[-1]
+            painter.setPen(QPen(QColor(DANGER), 2))
+            for dx, dy in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
+                painter.drawLine(int(p.x() + dx * 4), int(p.y() + dy * 4),
+                                 int(p.x() - 0), int(p.y() - 0))
+        painter.end()
+
+
 class StageProgressPanel(QWidget):
     """Animated pipeline monitor: chips checklist, machine gear, timers.
 
@@ -465,6 +653,18 @@ class StageProgressPanel(QWidget):
         self._chips_layout.addStretch()
         card_layout.addWidget(chip_row)
 
+        # A-4 live wireframe: the mini AON graph the user asked for.
+        # It sits LEFT of the textual rows (stage/bar/message/metrics)
+        # so the chips keep the full card width and the diagram image
+        # keeps its full preview size.
+        body_row = QHBoxLayout()
+        body_row.setSpacing(LG)
+        self._wireframe = _LiveWireframe()
+        body_row.addWidget(self._wireframe)
+
+        text_col = QVBoxLayout()
+        text_col.setSpacing(SM)
+
         summary_row = QHBoxLayout()
         summary_row.setSpacing(LG)
         self._stage_row = QLabel("<b>Current stage:</b> \u2014")
@@ -482,20 +682,20 @@ class StageProgressPanel(QWidget):
             "color: %s; border: none; background: transparent;" % TEXT
         )
         summary_row.addWidget(self._detected_row)
-        card_layout.addLayout(summary_row)
+        text_col.addLayout(summary_row)
 
         self._progress = _SheenProgressBar()
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
         self._progress.setTextVisible(False)
         self._progress.setFixedHeight(8)
-        card_layout.addWidget(self._progress)
+        text_col.addWidget(self._progress)
 
         self._message = QLabel("Preparing analysis\u2026")
         self._message.setWordWrap(True)
         self._message.setFont(QFont(*LABEL_FONT))
         self._message.setStyleSheet(f"color: {TEXT_MUTED}; border: none; background: transparent;")
-        card_layout.addWidget(self._message)
+        text_col.addWidget(self._message)
 
         self._checklist = QLabel("")
         self._checklist.setTextFormat(Qt.TextFormat.RichText)
@@ -507,12 +707,15 @@ class StageProgressPanel(QWidget):
         )
         # Hidden mirror: the chips row is the visible renderer.
         self._checklist.hide()
-        card_layout.addWidget(self._checklist)
+        text_col.addWidget(self._checklist)
 
         self._metrics = QLabel("")
         self._metrics.setWordWrap(True)
         self._metrics.setFont(QFont(*MUTED_FONT))
-        card_layout.addWidget(self._metrics)
+        text_col.addWidget(self._metrics)
+
+        body_row.addLayout(text_col)
+        card_layout.addLayout(body_row)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, SM, 0, 0)
@@ -572,6 +775,7 @@ class StageProgressPanel(QWidget):
 
         self._sync_chips(model)
         self._sync_title(model)
+        self._sync_wireframe(model)
         lines: List[str] = []
         for entry in model.entries:
             glyph = _STATE_GLYPHS.get(entry.state, PENDING)
@@ -631,6 +835,7 @@ class StageProgressPanel(QWidget):
         self._spin_phase = (self._spin_phase + 1) % 64
         self._gear.tick(8.0)  # 8 deg per 33ms ~ one turn per 1.5s
         self._progress.sheen_tick(1.0 / 45.0)
+        self._wireframe.tick(self._spin_phase)
         # Typewriter reveals ~5 chars per tick.
         if self._type_pos < len(self._type_target):
             self._type_pos = min(
@@ -769,6 +974,17 @@ class StageProgressPanel(QWidget):
         self._title.setText(label)
         self._title.setStyleSheet(
             f"color: {color}; border: none; background: transparent;"
+        )
+
+    def _sync_wireframe(self, model: Any) -> None:
+        """Feed the mini AON wireframe the REAL counters reported so far."""
+        finished = getattr(model, "is_finished", False)
+        outcome = getattr(model, "outcome", "") or "COMPLETED"
+        self._wireframe.set_metrics(
+            model.collect_metrics(),
+            running=not finished and model.running_entry() is not None,
+            done=finished and outcome != "FAILED",
+            failed=finished and outcome == "FAILED",
         )
 
     def _status_line(self, model: Any) -> str:

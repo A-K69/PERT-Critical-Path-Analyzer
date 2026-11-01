@@ -87,3 +87,20 @@ NETWORK_COLORS: dict[str, str] = {
     "edge_critical": WARNING,
     "path_highlight": ACCENT,
 }
+
+
+# ── QSS alpha helper (A-7) ─────────────────────────────────────────
+def qrgba(hex_color: str, alpha: int) -> str:
+    """A safe translucent colour string for QSS.
+
+    Qt parses 8-digit hex in QSS as ``#AARRGGBB`` (alpha FIRST), so
+    ``#4F8CFF18`` - intended as a 9% blue tint - was parsed as a 31%
+    neon olive ``(140, 255, 24)``.  Always build translucent colours
+    with this helper instead of appending hex to a palette token.
+    """
+    color = hex_color.lstrip("#")
+    red = int(color[0:2], 16)
+    green = int(color[2:4], 16)
+    blue = int(color[4:6], 16)
+    safe_alpha = max(0, min(255, int(alpha)))
+    return f"rgba({red}, {green}, {blue}, {safe_alpha})"

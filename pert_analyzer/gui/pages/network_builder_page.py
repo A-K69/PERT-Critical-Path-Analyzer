@@ -53,6 +53,7 @@ from pert_analyzer.gui.themes.palette import (
     TEXT_MUTED,
     TEXT_SECONDARY,
     WARNING,
+    qrgba,
 )
 from pert_analyzer.gui.themes.typography import (
     BUTTON_FONT,
@@ -219,7 +220,7 @@ class NetworkBuilderPage(QWidget):
             f"QPushButton {{ background-color: {ACCENT}; color: white;"
             f" border: none; border-radius: 6px; padding: 6px 14px;"
             f" font-weight: 600; }}"
-            f"QPushButton:hover {{ background-color: {ACCENT}DD; }}"
+            f"QPushButton:hover {{ background-color: {qrgba(ACCENT, 221)}; }}"
         )
         self._add_btn.clicked.connect(self._on_add_activity)
         header_row.addWidget(self._add_btn)
@@ -426,7 +427,7 @@ class NetworkBuilderPage(QWidget):
             f"QPushButton {{ background: {ACCENT}; color: white;"
             f" border: none; border-radius: 4px; padding: 4px 10px;"
             f" font-weight: 600; }}"
-            f"QPushButton:hover {{ background: {ACCENT}DD; }}"
+            f"QPushButton:hover {{ background: {qrgba(ACCENT, 221)}; }}"
             f"QPushButton:disabled {{ background: {TEXT_MUTED};"
             f" color: {SURFACE}; }}"
         )
@@ -512,9 +513,9 @@ class NetworkBuilderPage(QWidget):
         self._clear_btn.setFont(QFont(*BUTTON_FONT))
         self._clear_btn.setStyleSheet(
             f"QPushButton {{ background: {SURFACE_LIGHT}; color: {DANGER};"
-            f" border: 1px solid {DANGER}44; border-radius: 6px;"
+            f" border: 1px solid {qrgba(DANGER, 68)}; border-radius: 6px;"
             f" padding: 8px 16px; }}"
-            f"QPushButton:hover {{ background: {DANGER}22; }}"
+            f"QPushButton:hover {{ background: {qrgba(DANGER, 34)}; }}"
         )
         self._clear_btn.clicked.connect(self._on_clear)
         actions.addWidget(self._clear_btn)
@@ -525,7 +526,7 @@ class NetworkBuilderPage(QWidget):
             f"QPushButton {{ background: {ACCENT}; color: white;"
             f" border: none; border-radius: 6px; padding: 8px 20px;"
             f" font-weight: 600; }}"
-            f"QPushButton:hover {{ background: {ACCENT}DD; }}"
+            f"QPushButton:hover {{ background: {qrgba(ACCENT, 221)}; }}"
             f"QPushButton:disabled {{ background: {TEXT_MUTED}; color: {SURFACE}; }}"
         )
         self._calculate_btn.clicked.connect(self._on_calculate_cpm)
@@ -537,7 +538,7 @@ class NetworkBuilderPage(QWidget):
             f"QPushButton {{ background: {SUCCESS}; color: white;"
             f" border: none; border-radius: 6px; padding: 8px 20px;"
             f" font-weight: 600; }}"
-            f"QPushButton:hover {{ background: {SUCCESS}DD; }}"
+            f"QPushButton:hover {{ background: {qrgba(SUCCESS, 221)}; }}"
             f"QPushButton:disabled {{ background: {TEXT_MUTED}; color: {SURFACE}; }}"
         )
         self._analyze_btn.setEnabled(False)
@@ -616,7 +617,7 @@ class NetworkBuilderPage(QWidget):
             f"QLineEdit {{ background: transparent; color: {ACCENT};"
             f" font-weight: 600; border: none;"
             f" border-bottom: 1px dashed transparent; }}"
-            f"QLineEdit:hover {{ border-bottom: 1px dashed {ACCENT}55; }}"
+            f"QLineEdit:hover {{ border-bottom: 1px dashed {qrgba(ACCENT, 85)}; }}"
             f"QLineEdit:focus {{ background: {SURFACE};"
             f" border: 1px solid {ACCENT}; border-radius: 4px; }}"
         )
@@ -652,7 +653,7 @@ class NetworkBuilderPage(QWidget):
         del_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {TEXT_MUTED};"
             f" border: none; border-radius: 4px; }}"
-            f"QPushButton:hover {{ background: {DANGER}33; color: {DANGER}; }}"
+            f"QPushButton:hover {{ background: {qrgba(DANGER, 51)}; color: {DANGER}; }}"
         )
         del_btn.clicked.connect(
             lambda checked=False, _row=row: self._on_delete_activity(_row._activity_id)
@@ -1020,7 +1021,7 @@ class NetworkBuilderPage(QWidget):
             f"QPushButton {{ background: transparent; color: {TEXT_MUTED};"
             f" border: none; border-radius: 9px; padding: 0px;"
             f" min-height: 0px; }}"
-            f"QPushButton:hover {{ background: {DANGER}33; color: {DANGER}; }}"
+            f"QPushButton:hover {{ background: {qrgba(DANGER, 51)}; color: {DANGER}; }}"
         )
         remove_btn.clicked.connect(
             lambda checked=False, s=rel.source, t=rel.target:

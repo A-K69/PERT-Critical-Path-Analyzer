@@ -52,6 +52,7 @@ from pert_analyzer.gui.themes.palette import (
     TEXT_MUTED,
     TEXT_SECONDARY,
     WARNING,
+    qrgba,
 )
 from pert_analyzer.gui.themes.typography import (
     BODY_SMALL_FONT,
@@ -81,6 +82,92 @@ from pert_analyzer.gui.worker import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _WorkflowPath(QWidget):
+    """A-7 machine-path pills: the visible face of the same session
+    state the workflow indicator encodes.
+
+    current -> accent glow + dot, done -> soft green check,
+    blocked -> amber warning, pending -> quiet muted circle.
+    Clicking a pill navigates exactly like its sidebar button.
+
+    The path covers the five PIPELINE steps only (Network Builder is
+    a side tool, not a pipeline stage) so the pills stay index-parity
+    with the recorded workflow indicator.
+    """
+
+    _STEPS: tuple[NavDestination, ...] = (
+        NavDestination.ANALYZE,
+        NavDestination.UNDERSTANDING,
+        NavDestination.REVIEW,
+        NavDestination.VALIDATE,
+        NavDestination.RESULTS,
+    )
+
+    _GLYPHS = {
+        "blocked": "\u26a0",
+        "current": "\u25CF",
+        "done": "\u2713",
+        "pending": "\u25CB",
+    }
+
+    _CHIP = (
+        "padding: 2px 10px; border-radius: 11px;"
+        " background: transparent; border: 1px solid transparent;"
+    )
+
+    _STYLES = {
+        "current": f"color: {ACCENT}; font-weight: 600;"
+                   f" background-color: {qrgba(ACCENT, 24)};"
+                   f" border: 1px solid {qrgba(ACCENT, 120)};",
+        "done": f"color: {SUCCESS};"
+                f" background-color: {qrgba(SUCCESS, 18)};"
+                f" border: 1px solid {qrgba(SUCCESS, 66)};",
+        "blocked": f"color: {WARNING};"
+                   f" background-color: {qrgba(WARNING, 20)};"
+                   f" border: 1px solid {qrgba(WARNING, 80)};",
+        "pending": f"color: {TEXT_MUTED};"
+                   f" background-color: {qrgba(TEXT_MUTED, 12)};"
+                   f" border: 1px solid {qrgba(TEXT_MUTED, 40)};",
+    }
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(XS)
+        nav_map = {item.destination: item for item in NAV_ITEMS}
+        self._pills: dict[NavDestination, QPushButton] = {}
+        for dest in self._STEPS:
+            item = nav_map[dest]
+            pill = QPushButton()
+            pill.setFont(QFont(*BODY_SMALL_FONT))
+            pill.setCursor(Qt.CursorShape.PointingHandCursor)
+            pill.setToolTip(item.label)
+            self._layout.addWidget(pill)
+            self._pills[dest] = pill
+        self.sync(
+            [(dest, "pending", nav_map[dest].label) for dest in self._STEPS]
+        )
+
+    def pill_list(self) -> list[tuple[NavDestination, QPushButton]]:
+        """(destination, pill) pairs registration-order for wiring."""
+        return list(self._pills.items())
+
+    def sync(
+        self, states: list[tuple[NavDestination, str, str]]
+    ) -> None:
+        """Apply (dest, state, label) triples computed by
+        ``_update_workflow_indicator`` - one source of truth."""
+        for dest, state, label in states:
+            pill = self._pills[dest]
+            glyph = self._GLYPHS[state]
+            pill.setText(f"{glyph} {label}")
+            pill.setToolTip(label)
+            pill.setStyleSheet(
+                f"QPushButton {{ {self._CHIP} {self._STYLES[state]} }}"
+            )
 
 
 class MainWindow(QMainWindow):
@@ -166,12 +253,24 @@ class MainWindow(QMainWindow):
 
         hdr_layout.addStretch()
 
+        # A-7 shell: the workflow indicator becomes machine-path pills.
+        # The mirror Label keeps the recorded indicator text (the gui
+        # tests read ``_workflow_indicator.text()``) but stays hidden;
+        # the pill path is the visible face of the very same state.
         self._workflow_indicator = QLabel()
         self._workflow_indicator.setFont(QFont(*BODY_SMALL_FONT))
         self._workflow_indicator.setStyleSheet(
             f"color: {TEXT_SECONDARY}; border: none; background: transparent;"
         )
+        self._workflow_indicator.setVisible(False)
         hdr_layout.addWidget(self._workflow_indicator)
+
+        self._workflow_path = _WorkflowPath()
+        hdr_layout.addWidget(self._workflow_path)
+        for dest, pill in self._workflow_path.pill_list():
+            pill.clicked.connect(
+                lambda checked=False, d=dest: self._on_nav(d)
+            )
 
         hdr_layout.addSpacing(XXL)
 
@@ -211,13 +310,20 @@ class MainWindow(QMainWindow):
             btn.setFont(QFont(*BUTTON_FONT))
             btn.setToolTip(item.label)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            # A-7 shell language: the active item is a real translucent
+            # blue tint with a 3px accent rail on the left (always
+            # present, transparent while idle, so nothing shifts).
             btn.setStyleSheet(
-                f"QPushButton {{ text-align: left; padding: 8px {MD}px;"
+                f"QPushButton {{ text-align: left;"
+                f" padding: 9px {MD}px 9px {MD - 3}px;"
                 f" border-radius: {RADIUS_SM}px; border: none;"
+                f" border-left: 3px solid transparent;"
                 f" color: {TEXT_SECONDARY}; background: transparent; }}"
-                f"QPushButton:hover {{ background-color: {SURFACE_LIGHT}; color: {TEXT}; }}"
-                f"QPushButton:checked {{ background-color: {ACCENT}18;"
-                f" color: {ACCENT}; font-weight: 600; }}"
+                f"QPushButton:hover {{ background-color: {SURFACE_LIGHT};"
+                f" color: {TEXT}; }}"
+                f"QPushButton:checked {{ background-color: {qrgba(ACCENT, 24)};"
+                f" color: {ACCENT}; font-weight: 600;"
+                f" border-left: 3px solid {ACCENT}; }}"
             )
             btn.clicked.connect(
                 lambda checked=False, dest=item.destination: self._on_nav(dest)
@@ -362,19 +468,36 @@ class MainWindow(QMainWindow):
                 return status == ValidationCenterStatus.INVALID
             return False
 
+        nav_map = {item.destination: item for item in NAV_ITEMS}
         parts = []
+        pill_states = []
         for dest, name in steps:
             if _step_blocked(dest) and dest.value != current_idx:
                 glyph, color = "\u26a0", WARNING
+                state = "blocked"
             elif dest.value == current_idx:
                 glyph, color = "\u25CF", ACCENT
+                state = "current"
             elif _step_done(dest):
                 glyph, color = "\u2713", SUCCESS
+                state = "done"
             else:
                 glyph, color = "\u25CB", TEXT_MUTED
+                state = "pending"
             parts.append(f'<font color="{color}">{glyph}</font> {name}')
+            item = nav_map[dest]
+            pill_states.append(
+                (
+                    dest,
+                    state,
+                    nav_label(item.key, self._language) or item.label,
+                )
+            )
         self._workflow_indicator.setTextFormat(Qt.TextFormat.RichText)
         self._workflow_indicator.setText(" \u2014 ".join(parts))
+        path = getattr(self, "_workflow_path", None)
+        if path is not None:
+            path.sync(pill_states)
 
     def _connect_signals(self) -> None:
         self._analysis_page.image_selected_signal.connect(self._on_image_selected)

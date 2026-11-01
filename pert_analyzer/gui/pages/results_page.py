@@ -59,6 +59,7 @@ from pert_analyzer.gui.themes.palette import (
     TEXT_MUTED,
     TEXT_SECONDARY,
     WARNING,
+    qrgba,
 )
 from pert_analyzer.gui.themes.spacing import RADIUS_SM
 from pert_analyzer.gui.themes.typography import (
@@ -373,7 +374,7 @@ class ResultsPage(QWidget):
         banner_layout.addLayout(banner_text, stretch=1)
         self._status_banner.setStyleSheet(
             f"QFrame {{ background-color: {_rgba(SUCCESS, 20)};"
-            f" border: 1px solid {SUCCESS}44; border-radius: 8px; }}"
+            f" border: 1px solid {qrgba(SUCCESS, 68)}; border-radius: 8px; }}"
         )
         layout.addWidget(self._status_banner)
 
@@ -905,7 +906,7 @@ class ResultsPage(QWidget):
         )
         self._status_banner.setStyleSheet(
             f"QFrame {{ background-color: {_rgba(SUCCESS, 20)};"
-            f" border: 1px solid {SUCCESS}44; border-radius: 8px; }}"
+            f" border: 1px solid {qrgba(SUCCESS, 68)}; border-radius: 8px; }}"
         )
 
         self._stack.setCurrentIndex(self._DASHBOARD)

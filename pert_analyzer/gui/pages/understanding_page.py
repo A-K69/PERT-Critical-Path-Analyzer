@@ -35,6 +35,7 @@ from pert_analyzer.gui.themes.palette import (
     TEXT_MUTED,
     TEXT_SECONDARY,
     WARNING,
+    qrgba,
 )
 from pert_analyzer.gui.themes.spacing import LG, MD, RADIUS_LG, RADIUS_MD, SM, XS
 from pert_analyzer.gui.themes.typography import (
@@ -314,8 +315,8 @@ class UnderstandingPage(QWidget):
         self._banner.setFont(QFont(*BODY_SMALL_FONT))
         self._banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._banner.setStyleSheet(
-            f"color: {ACCENT}; background-color: {ACCENT}18;"
-            f" border: 1px solid {ACCENT}44; border-radius: 6px;"
+            f"color: {ACCENT}; background-color: {qrgba(ACCENT, 24)};"
+            f" border: 1px solid {qrgba(ACCENT, 68)}; border-radius: 6px;"
             f" padding: 4px 10px; font-weight: 600;"
         )
         header.addWidget(self._banner, alignment=Qt.AlignmentFlag.AlignTop)

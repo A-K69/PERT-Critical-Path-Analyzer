@@ -52,6 +52,7 @@ from pert_analyzer.gui.themes.palette import (
     TEXT_SECONDARY,
     TEXT_MUTED,
     WARNING,
+    qrgba,
 )
 
 
@@ -155,15 +156,15 @@ def _build_stylesheet() -> str:
         QPushButton#secondary {{
             background-color: transparent;
             color: {ACCENT};
-            border: 1px solid {ACCENT}66;
+            border: 1px solid {qrgba(ACCENT, 102)};
             font-weight: 600;
         }}
         QPushButton#secondary:hover {{
-            background-color: {ACCENT}14;
+            background-color: {qrgba(ACCENT, 20)};
             border-color: {ACCENT};
         }}
         QPushButton#secondary:pressed {{
-            background-color: {ACCENT}22;
+            background-color: {qrgba(ACCENT, 34)};
         }}
         QPushButton#secondary:disabled {{
             color: {TEXT_MUTED};
@@ -291,7 +292,7 @@ def _build_stylesheet() -> str:
             padding: 5px 8px;
         }}
         QTableWidget::item:selected {{
-            background-color: {ACCENT}33;
+            background-color: {qrgba(ACCENT, 51)};
         }}
         QHeaderView::section {{
             background-color: {ELEVATED};
@@ -337,7 +338,7 @@ def _build_stylesheet() -> str:
             border: 1px solid {BORDER};
             border-radius: {RADIUS_SM}px;
             padding: 6px 8px;
-            selection-background-color: {ACCENT}66;
+            selection-background-color: {qrgba(ACCENT, 102)};
         }}
         QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus {{
             border-color: {ACCENT};

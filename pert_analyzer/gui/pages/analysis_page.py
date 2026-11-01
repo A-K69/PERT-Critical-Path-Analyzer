@@ -58,6 +58,7 @@ from pert_analyzer.gui.themes.palette import (
     TEXT_MUTED,
     TEXT_SECONDARY,
     WARNING,
+    qrgba,
 )
 from pert_analyzer.gui.themes.typography import (
     BODY_SMALL_FONT,
@@ -820,17 +821,35 @@ class ImageView(QLabel):
 
 
 class StatusPanel(QWidget):
-    """Coloured status text panel at the bottom of the Analysis page."""
+    """Coloured status pill at the bottom of the Analysis page.
+
+    A-7 shell language: a status dot + text inside one tinted
+    capsule whose colour carries the session meaning.  The text
+    label stays a plain QLabel (recorders read ``_label.text()``)
+    inside a capsule whose board reflects the same colour.
+    """
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, SM, 0, 0)
+        self._pill = QWidget()
+        self._pill.setObjectName("statusPill")
+        pill_layout = QHBoxLayout(self._pill)
+        pill_layout.setContentsMargins(10, 3, 12, 3)
+        pill_layout.setSpacing(7)
+        dot_font = QFont(*BODY_SMALL_FONT)
+        dot_font.setPointSize(max(dot_font.pointSize() - 4, 6))
+        self._dot = QLabel("\u25CF")
+        self._dot.setFont(dot_font)
+        pill_layout.addWidget(self._dot)
         self._label = QLabel("Ready")
         self._label.setFont(QFont(*BODY_SMALL_FONT))
         self._label.setWordWrap(True)
-        self._label.setStyleSheet(f"color: {TEXT_MUTED};")
-        layout.addWidget(self._label)
+        pill_layout.addWidget(self._label)
+        pill_layout.addStretch()
+        layout.addWidget(self._pill)
+        layout.addStretch()
         self.set_status("Ready")
 
     def set_status(self, text: str, kind: str = "muted") -> None:
@@ -841,7 +860,13 @@ class StatusPanel(QWidget):
             "warning": WARNING,
             "success": SUCCESS,
         }.get(kind, TEXT_MUTED)
-        self._label.setStyleSheet(f"color: {color}; padding: 4px 0px;")
+        self._dot.setStyleSheet(f"color: {color}; background: transparent;")
+        self._label.setStyleSheet(f"color: {color}; background: transparent;")
+        self._pill.setStyleSheet(
+            f"QWidget#statusPill {{ background-color: {qrgba(color, 22)};"
+            f" border: 1px solid {qrgba(color, 92)};"
+            f" border-radius: 12px; }}"
+        )
         self._label.setText(text)
 
 
@@ -951,9 +976,25 @@ class AnalysisPage(QWidget):
         self._zoom_in_btn.setEnabled(False)
         self._zoom_in_btn.setToolTip("Zoom in")
         self._zoom_in_btn.clicked.connect(self._image_view.zoom_in)
+        # A-7 shell language: one mini-instrument geometry for the
+        # whole row and the zoom value becomes a same-family chip.
+        # (Widget-level QSS relaxes the app-wide button padding so the
+        # explicit min/max sizes are honoured instead of the tall hint.)
+        for b in (self._fit_btn, self._zoom_out_btn, self._zoom_in_btn):
+            b.setStyleSheet(
+                "QPushButton { padding: 0px 10px; min-height: 28px; }"
+            )
+        self._fit_btn.setMinimumSize(50, 30)
+        self._fit_btn.setMaximumSize(80, 30)
+        self._zoom_out_btn.setFixedSize(32, 30)
+        self._zoom_in_btn.setFixedSize(32, 30)
         self._zoom_label = QLabel("100%")
         self._zoom_label.setFont(QFont(*MUTED_FONT))
-        self._zoom_label.setStyleSheet(f"color: {TEXT_MUTED}; border: none;")
+        self._zoom_label.setStyleSheet(
+            f"color: {TEXT_MUTED}; border-radius: 9px;"
+            f" background-color: {qrgba(TEXT_MUTED, 16)};"
+            f" padding: 3px 9px;"
+        )
         zoom_row.addWidget(self._fit_btn)
         zoom_row.addWidget(self._zoom_out_btn)
         zoom_row.addWidget(self._zoom_in_btn)

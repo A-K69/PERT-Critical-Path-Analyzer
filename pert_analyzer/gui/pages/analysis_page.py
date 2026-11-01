@@ -28,6 +28,7 @@ from PySide6.QtGui import (
     QPainter,
     QPen,
     QPixmap,
+    QRadialGradient,
     QShortcut,
 )
 from PySide6.QtWidgets import (
@@ -156,14 +157,9 @@ class ImageView(QLabel):
         self._scan_timer = QTimer(self)
         self._scan_timer.setInterval(33)
         self._scan_timer.timeout.connect(self._advance_scan)
-        # A-5 side art: real pipeline counters mirrored beside the image
-        # (nodes ladder LEFT from ``shapes``, arrows ladder RIGHT from
-        # ``arrows``/``activities``).  Targets are pushed by the page;
-        # eased values follow on the 33ms machine beat in _advance_scan.
-        self._art_nodes = 0.0
-        self._art_edges = 0.0
-        self._art_nodes_t = 0.0
-        self._art_edges_t = 0.0
+        # A-6 "chamber of light": ambient processing art around the
+        # centred image (glow + orbiting light + shimmer columns).
+        # Pure atmosphere - no counters, no captions, no data-viz.
         self._art_running = False
         self._art_done = False
         self._art_failed = False
@@ -194,35 +190,22 @@ class ImageView(QLabel):
         self._scan_t += 1.0 / 60.0
         if self._scan_t >= 2.0:
             self._scan_t -= 2.0
-        # Side-art counters ease on the same machine beat (0.16/frame
-        # ~= the panel wireframe rate, same visual cadence).
-        self._art_nodes += (self._art_nodes_t - self._art_nodes) * 0.16
-        self._art_edges += (self._art_edges_t - self._art_edges) * 0.16
         self.update()
 
     def set_live_counts(
         self, counts: Any, running: bool, done: bool, failed: bool
     ) -> None:
-        """Feed the side art REAL pipeline counters + session state.
+        """Chamber state switch (A-6).
 
-        ``shapes`` drives the left nodes ladder, ``arrows`` (with
-        ``activities`` as the assembly-stage alias) drives the right
-        arrows ladder.  Nothing is invented: when the pipeline has not
-        reported a counter yet its ladder simply stays at 0.  Idle
-        states snap (no beat to ease with), running states ease.
+        The user rejected the A-5 counter ladders ("two lines with
+        dots") in favour of pure atmosphere, so the pipeline numbers
+        are no longer drawn anywhere.  ``counts`` stays in the
+        signature to keep the page wiring untouched; only the three
+        state flags drive the chamber of light.
         """
-        counts = counts or {}
-        self._art_nodes_t = float(counts.get("shapes") or 0)
-        edges = counts.get("arrows")
-        if not edges:
-            edges = counts.get("activities")
-        self._art_edges_t = float(edges or 0)
         self._art_running = bool(running)
         self._art_done = bool(done)
         self._art_failed = bool(failed)
-        if not self._art_running:
-            self._art_nodes = self._art_nodes_t
-            self._art_edges = self._art_edges_t
         self.update()
 
     # ------------------------------------------------------------------
@@ -452,6 +435,10 @@ class ImageView(QLabel):
             return
 
         painter.setClipRect(edge)
+        # A-6 chamber: the soft halo lives BEHIND the image so the
+        # diagram appears to float in a pool of light.
+        self._paint_chamber_backdrop(painter, edge)
+
         disp_w, disp_h = self._content_size()
         target_w = max(1, int(round(disp_w)))
         target_h = max(1, int(round(disp_h)))
@@ -470,9 +457,9 @@ class ImageView(QLabel):
                 painter, x, y, target_w, target_h, edge
             )
 
-        # A-5 side art: real-counter ladders living in the viewer's side
-        # margins while the machine reads (or just finished reading).
-        self._paint_side_art(painter, x, y, target_w, target_h, edge)
+        # A-6 chamber foreground: rotating dash-orbits, riding light
+        # dots, shimmer columns in the margins, corner instruments.
+        self._paint_chamber_front(painter, x, y, target_w, target_h, edge)
 
         if self._drag_hover:
             pen = QPen(QColor(ACCENT), 2)
@@ -542,14 +529,67 @@ class ImageView(QLabel):
         painter.restore()
 
     # ------------------------------------------------------------------
-    # A-5 side art: the viewer's margins become a live build site
+    # A-6 "Chamber of Light": ambient processing art around the image.
+    # Zero counters, zero captions - pure premium atmosphere driven by
+    # the session flags and the 33ms machine beat.  The image stays
+    # centred; everything breathes AROUND it, never on it.
     # ------------------------------------------------------------------
 
-    _ART_MARGIN_MIN = 62          # px: don't paint ladders in thin margins
-    _ART_NODES_SLOTS = 22         # ladder slots (dots), real counts in captions
-    _ART_EDGES_SLOTS = 18         # ladder slots (chevrons)
+    _CHB_MARGIN_MIN = 80.0      # px: shimmer columns need a real margin
 
-    def _paint_side_art(
+    def _chamber_active(self) -> bool:
+        return self._scanning or self._art_done or self._art_failed
+
+    def _chamber_color(self) -> str:
+        if self._art_failed:
+            return DANGER
+        if self._art_done:
+            return SUCCESS
+        return ACCENT
+
+    # ------------------------------------------------------------------
+    def _paint_chamber_backdrop(
+        self, painter: "QPainter", frame: "QRect"
+    ) -> None:
+        """Soft breathing halo + two dashed elliptical orbits, BEHIND
+        the image: the diagram appears to float in a pool of light."""
+        if not self._chamber_active():
+            return
+        if self._pixmap is None or self._pixmap.isNull():
+            return
+        color = self._chamber_color()
+        fx = float(frame.left())
+        fy = float(frame.top())
+        fw = float(frame.width())
+        fh = float(frame.height())
+        cx = fx + fw / 2.0
+        cy = fy + fh / 2.0
+        breathe = 0.5 + 0.5 * math.sin(self._scan_t * math.pi)
+
+        # The halo: a pool of light the image floats in.
+        radius = max(fw, fh) * 0.62
+        grad = QRadialGradient(QPointF(cx, cy), radius)
+        grad.setColorAt(0.0, _color_alpha(color, int(30 + 26 * breathe)))
+        grad.setColorAt(1.0, _color_alpha(color, 0))
+        painter.fillRect(int(fx), int(fy), int(fw), int(fh), grad)
+
+        # Machine orbits: dashed ellipses drifting in opposite turns.
+        painter.setPen(QPen(_color_alpha(color, 44), 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        rings = (
+            (fw * 0.42, fh * 0.44, 36.0, 14),
+            (fw * 0.34, fh * 0.30, -26.0, 10),
+        )
+        for rx, ry, speed, segs in rings:
+            rect = QRectF(cx - rx, cy - ry, rx * 2.0, ry * 2.0)
+            span = int(360.0 / segs * 0.62 * 16)
+            base = self._scan_t * speed
+            for k in range(segs):
+                a0 = int((base + k * 360.0 / segs) * 16.0) % 5760
+                painter.drawArc(rect, a0, span)
+
+    # ------------------------------------------------------------------
+    def _paint_chamber_front(
         self,
         painter: "QPainter",
         img_x: float,
@@ -558,182 +598,157 @@ class ImageView(QLabel):
         img_h: float,
         frame: "QRect",
     ) -> None:
-        """Concept A beside the image: nodes ladder LEFT (grows with
-        ``shapes``), arrows ladder RIGHT (grows with ``arrows`` /
-        ``activities``).  Captions carry the REAL counters; the art is
-        purely decorative and honest — it only ever mirrors what the
-        pipeline already reported."""
-        nodes_gone = (
-            self._art_nodes <= 0.01
-            and self._art_edges <= 0.01
-            and self._art_nodes_t <= 0.01
-            and self._art_edges_t <= 0.01
+        """Foreground: light dots riding the orbits vanishing BEHIND
+        the diagram, a soft border pulse on the image while it is
+        read, shimmer columns in the side margins, quiet corner
+        instruments.  No numbers anywhere."""
+        if not self._chamber_active():
+            return
+        color = self._chamber_color()
+        fx = float(frame.left())
+        fy = float(frame.top())
+        fw = float(frame.width())
+        fh = float(frame.height())
+        cx = fx + fw / 2.0
+        cy = fy + fh / 2.0
+        t = self._scan_t
+        settle = 0.55 if self._art_done else 1.0   # completion = calm
+
+        # Light dots riding the orbits; when one crosses toward the
+        # diagram body it simply disappears behind it.
+        rings = (
+            (fw * 0.42, fh * 0.44, 36.0, 5),
+            (fw * 0.34, fh * 0.30, -26.0, 3),
         )
-        active = self._scanning or self._art_done or self._art_failed
-        if nodes_gone or not active:
-            return
+        painter.setPen(Qt.PenStyle.NoPen)
+        for rx, ry, speed, dots in rings:
+            for k in range(dots):
+                ang = math.radians(
+                    t * speed * settle + k * (360.0 / dots)
+                )
+                px = cx + rx * math.cos(ang)
+                if not (px < img_x - 3.0 or px > img_x + img_w + 3.0):
+                    continue   # pass behind the diagram, no overlay
+                py = cy + ry * math.sin(ang)
+                p = QPointF(px, py)
+                painter.setBrush(_color_alpha(color, 45))
+                painter.drawEllipse(p, 4.2, 4.2)
+                painter.setBrush(_color_alpha(color, 185))
+                painter.drawEllipse(p, 1.7, 1.7)
 
-        if self._art_failed:
-            nodes_color, edges_color = DANGER, DANGER
-        elif self._art_done:
-            nodes_color, edges_color = SUCCESS, SUCCESS
-        else:
-            nodes_color, edges_color = ACCENT, INFO
-
-        # The ladders share the image's vertical span so the eye reads
-        # image + art as one composition, like the approved board.
-        y0 = img_y + 26.0
-        y1 = img_y + img_h - 10.0
-        if y1 - y0 < 40.0:
-            return
-        caption_y = img_y + 4.0
-
-        left_w = int(img_x - frame.left())
-        if left_w >= self._ART_MARGIN_MIN:
-            cx = frame.left() + left_w / 2.0
-            self._paint_ladder(
-                painter,
-                cx=cx,
-                y0=y0,
-                y1=y1,
-                caption_x=frame.left(),
-                caption_w=left_w,
-                caption_y=caption_y,
-                shown=self._art_nodes,
-                target=self._art_nodes_t,
-                slots=self._ART_NODES_SLOTS,
-                color=nodes_color,
-                label="SHAPES",
-                dots=True,
+        # A soft border light wrapping the image while being read.
+        if self._scanning:
+            glow = int(
+                46 + 40 * (0.5 + 0.5 * math.sin(t * math.pi * 2.0))
             )
+            painter.setPen(QPen(_color_alpha(color, glow), 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            x0, y0 = int(img_x), int(img_y)
+            x1 = int(img_x + img_w) - 1
+            y1 = int(img_y + img_h) - 1
+            if x1 > x0 and y1 > y0:
+                painter.drawLine(x0, y0, x1, y0)
+                painter.drawLine(x1, y0, x1, y1)
+                painter.drawLine(x1, y1, x0, y1)
+                painter.drawLine(x0, y1, x0, y0)
 
+        # Shimmer columns in the side margins (only when real).
+        left_w = img_x - fx
+        if left_w >= self._CHB_MARGIN_MIN:
+            self._paint_shimmer_column(
+                painter, fx + left_w / 2.0, img_y, img_h, color,
+                0.0, settle,
+            )
         right_x = img_x + img_w
-        right_w = int(frame.right() + 1 - right_x)
-        if right_w >= self._ART_MARGIN_MIN:
-            cx = right_x + right_w / 2.0
-            self._paint_ladder(
-                painter,
-                cx=cx,
-                y0=y0,
-                y1=y1,
-                caption_x=right_x,
-                caption_w=right_w,
-                caption_y=caption_y,
-                shown=self._art_edges,
-                target=self._art_edges_t,
-                slots=self._ART_EDGES_SLOTS,
-                color=edges_color,
-                label="ARROWS",
-                dots=False,
+        right_w = fx + fw - right_x
+        if right_w >= self._CHB_MARGIN_MIN:
+            self._paint_shimmer_column(
+                painter, right_x + right_w / 2.0, img_y, img_h, color,
+                1.35, settle,
             )
 
-    def _paint_ladder(
+        # Quiet corner instruments - only where real padding exists so
+        # they can never sit on top of the diagram.
+        pad_top = img_y - fy
+        pad_bot = (fy + fh) - (img_y + img_h)
+        corners = []
+        if pad_top >= 34.0:
+            corners += [(fx + 24.0, fy + 24.0),
+                        (fx + fw - 24.0, fy + 24.0)]
+        if pad_bot >= 34.0:
+            corners += [(fx + 24.0, fy + fh - 24.0),
+                        (fx + fw - 24.0, fy + fh - 24.0)]
+        for idx, (ux, uy) in enumerate(corners):
+            self._paint_hud_corner(painter, ux, uy, color, idx, t * settle)
+
+    # ------------------------------------------------------------------
+    def _paint_shimmer_column(
         self,
         painter: "QPainter",
         cx: float,
         y0: float,
-        y1: float,
-        caption_x: float,
-        caption_w: float,
-        caption_y: float,
-        shown: float,
-        target: float,
-        slots: int,
+        span: float,
         color: str,
-        label: str,
-        dots: bool,
+        phase: float,
+        settle: float,
     ) -> None:
-        """One ladder (dots OR chevrons) grown from a REAL counter.
+        """A quiet column of living light: a gradient band, one bright
+        traveller riding up and down, drifting motes around it."""
+        if span < 60.0:
+            return
+        t = self._scan_t
+        top = y0 + 10.0
+        bottom = y0 + span - 10.0
+        h = bottom - top
 
-        ``shown`` is eased; ``target`` is the pipeline's latest number.
-        Caption always shows the real ints.  Painted with the surviving
-        primitive set only (int drawLine + drawEllipse(QPointF, f, f)).
-        """
-        if target < 0.5:
-            return  # nothing reported yet — silence is honest
+        grad = QLinearGradient(0.0, float(top), 0.0, float(bottom))
+        grad.setColorAt(0.0, _color_alpha(color, 0))
+        grad.setColorAt(0.5, _color_alpha(color, 30))
+        grad.setColorAt(1.0, _color_alpha(color, 0))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.fillRect(int(cx - 2.0), int(top), 4, int(h), grad)
 
-        slots = max(2, min(slots, int(target), int(y1 - y0) // 9))
-        filled = round(shown / target * slots)
-        filled = max(0, min(slots, filled))
-        frac = shown / target * slots - filled  # frontier easing fraction
+        # The traveller.
+        u = 0.5 + 0.5 * math.sin((t + phase) * math.pi * 1.15)
+        ty = bottom - u * h
+        head = QPointF(cx, ty)
+        tail = QPointF(cx, ty + h * 0.10)
+        painter.setBrush(_color_alpha(color, int(70 * settle + 10)))
+        painter.drawEllipse(tail, 3.4, 3.4)
+        painter.setBrush(_color_alpha(color, 210))
+        painter.drawEllipse(head, 2.0, 2.0)
 
-        painter.save()
+        # Drifting motes.
+        for k in range(4):
+            yy = top + h * (0.14 * k + 0.1)
+            sway = math.sin((t + phase + 0.8 * k) * math.pi * 1.6) * 7.0
+            mote = QPointF(cx + sway, yy)
+            painter.setBrush(_color_alpha(color, 85))
+            painter.drawEllipse(mote, 1.25, 1.25)
 
-        # Caption: the truth, in real numbers.
-        painter.setFont(QFont(*BODY_SMALL_FONT))
-        painter.setPen(_color_alpha(TEXT_SECONDARY, 235))
-        painter.drawText(
-            QRectF(caption_x, caption_y, caption_w, 14.0),
-            Qt.AlignmentFlag.AlignHCenter,
-            f"{label} {int(round(shown))}/{int(round(target))}",
-        )
-
-        if dots:
-            # Vertical spine the dots ride on.
-            painter.setPen(QPen(_color_alpha(color, 120), 1))
-            painter.drawLine(int(cx), int(y0), int(cx), int(y1))
-            step = (y1 - y0) / (slots - 1)
-            for i in range(slots):
-                y = y0 + step * i
-                p = QPointF(cx, y)
-                if i < filled:
-                    r = 3.6
-                    is_front = (i == filled - 1) and self._art_running
-                    if is_front:
-                        breath = 1.0 + 0.22 * math.sin(self._scan_t * 12.0)
-                        r *= breath
-                    painter.setPen(Qt.PenStyle.NoPen)
-                    painter.setBrush(_color_alpha(color, 235))
-                    painter.drawEllipse(p, r, r)
-                    if is_front:
-                        painter.setPen(QPen(_color_alpha(color, 70), 1))
-                        painter.setBrush(Qt.BrushStyle.NoBrush)
-                        painter.drawEllipse(p, r + 3.5, r + 3.5)
-                elif i == filled and frac > 0.05 and self._art_running:
-                    # The node being born: ghost that fills in.
-                    painter.setPen(Qt.PenStyle.NoPen)
-                    painter.setBrush(
-                        _color_alpha(color, max(28, int(200 * frac)))
-                    )
-                    painter.drawEllipse(p, 2.2 + 1.4 * frac, 2.2 + 1.4 * frac)
-                else:
-                    painter.setPen(QPen(_color_alpha(color, 55), 1))
-                    painter.setBrush(Qt.BrushStyle.NoBrush)
-                    painter.drawEllipse(p, 3.2, 3.2)
-        else:
-            # Arrows climb: chevrons point UP, lit from the bottom.
-            step = (y1 - y0) / (slots - 1)
-            h = 5.5
-            for i in range(slots):
-                y = y1 - step * i   # bottom -> top
-                lit = i < filled
-                if lit:
-                    is_front = (i == filled - 1) and self._art_running
-                    a = int(235 - 175 * math.sin(self._scan_t * 12.0) * 0.5)
-                    a = max(60, min(235, a))
-                    painter.setPen(QPen(_color_alpha(color, a), 1.7))
-                    painter.drawLine(int(cx - h), int(y + h * 0.62),
-                                     int(cx), int(y - h * 0.62))
-                    painter.drawLine(int(cx), int(y - h * 0.62),
-                                     int(cx + h), int(y + h * 0.62))
-                    if is_front:
-                        painter.setPen(QPen(_color_alpha(color, 70), 1))
-                        painter.setBrush(Qt.BrushStyle.NoBrush)
-                        painter.drawEllipse(QPointF(cx, y), 6.8, 6.8)
-                elif i == filled and frac > 0.05 and self._art_running:
-                    # Being traced: partial chevron from its tip.
-                    dy = h * 0.62 * frac
-                    painter.setPen(QPen(_color_alpha(color, 140), 1.7))
-                    painter.drawLine(int(cx - h), int(y + h * 0.62),
-                                     int(cx), int(y + h * 0.62 - dy))
-                else:
-                    painter.setPen(QPen(_color_alpha(color, 45), 1))
-                    painter.drawLine(int(cx - h), int(y + h * 0.62),
-                                     int(cx), int(y - h * 0.62))
-                    painter.drawLine(int(cx), int(y - h * 0.62),
-                                     int(cx + h), int(y + h * 0.62))
-
-        painter.restore()
+    # ------------------------------------------------------------------
+    def _paint_hud_corner(
+        self,
+        painter: "QPainter",
+        cx: float,
+        cy: float,
+        color: str,
+        idx: int,
+        t: float,
+    ) -> None:
+        """A tiny instrument: arc + drifting needle + head dot."""
+        rect = QRectF(cx - 13.0, cy - 13.0, 26.0, 26.0)
+        painter.setPen(QPen(_color_alpha(color, 50), 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawArc(rect, (200 + idx * 90) * 16 % 5760, 1920)
+        a = math.radians(t * 46.0 + idx * 97.0)
+        px = cx + 10.0 * math.cos(a)
+        py = cy + 10.0 * math.sin(a)
+        painter.setPen(QPen(_color_alpha(color, 120), 1.4))
+        painter.drawLine(int(cx), int(cy), int(px), int(py))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(_color_alpha(color, 150))
+        painter.drawEllipse(QPointF(px, py), 1.3, 1.3)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
